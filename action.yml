@@ -1,0 +1,15 @@
+name: 'depSync'
+description: 'Context-Aware AI Dependency Manager for Monorepos'
+author: 'Your Name'
+
+inputs:
+  github-token:
+    description: 'GitHub token for API access (usually secrets.GITHUB_TOKEN)'
+    required: true
+  gemini-api-key:
+    description: 'Gemini API Key for release notes analysis'
+    required: true
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'
