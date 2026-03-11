@@ -12,7 +12,8 @@
     "noUnusedLocals": true,
     "useUnknownInCatchVariables": true,
     "noFallthroughCasesInSwitch": true,
-    "noImplicitReturns": true
+    "noImplicitReturns": true,
+    "sourceMap": false
   },
   "include": ["src/**/*"]
 }

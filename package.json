@@ -5,12 +5,12 @@
   "main": "index.js",
   "scripts": {
     "start": "node src/index.ts",
-    "build": "ncc build src/index.ts -o dist --source-map",
+    "build": "ncc build src/index.ts -o dist",
     "test": "vitest run",
     "test:unit": "vitest run \"__tests__/**/*.test.unit.ts\"",
     "test:int": "vitest run \"__tests__/**/*.test.int.ts\"",
     "test:watch": "vitest",
-    "lint": "biome check src/",
+    "lint": "biome check src/ --write",
     "format": "biome format --write src/",
     "typecheck": "tsc --noEmit"
   },
