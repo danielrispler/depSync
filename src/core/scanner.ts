@@ -28,7 +28,10 @@ const defaultDependencies: ScannerDependencies = {
 	debug: core.debug,
 };
 
-const parseEntries = (files: string[], deps: ScannerDependencies): Promise<([string, PackageJson] | null)[]> =>
+const parseEntries = (
+	files: string[],
+	deps: ScannerDependencies,
+): Promise<([string, PackageJson] | null)[]> =>
 	Promise.all(
 		files.map(async (file) => {
 			try {
@@ -51,7 +54,7 @@ const parseEntries = (files: string[], deps: ScannerDependencies): Promise<([str
 				return null;
 			}
 		}),
-	)
+	);
 
 const getPatterns = (workspaceRoot: string): string => {
 	const pattern = [`${workspaceRoot}/**/package.json`];
@@ -63,9 +66,11 @@ const getPatterns = (workspaceRoot: string): string => {
 	];
 
 	return [...pattern, ...antipatterns].join("\n");
-}
+};
 
-const isValidEntry = (entry: [string, PackageJson] | null): entry is [string, PackageJson] => entry !== null;
+const isValidEntry = (
+	entry: [string, PackageJson] | null,
+): entry is [string, PackageJson] => entry !== null;
 
 /**
  * Scans the workspace for package.json files while strictly excluding
