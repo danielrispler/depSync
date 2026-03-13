@@ -10,10 +10,12 @@
 	},
 	"formatter": {
 		"enabled": true,
-		"indentStyle": "tab"
+		"indentStyle": "tab",
+		"includes": ["src/**/*.ts"]
 	},
 	"linter": {
 		"enabled": true,
+		"includes": ["src/**/*.ts"],
 		"rules": {
 			"recommended": true
 		}

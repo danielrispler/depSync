@@ -6,9 +6,12 @@ inputs:
   github-token:
     description: 'GitHub token for API access (usually secrets.GITHUB_TOKEN)'
     required: true
-  gemini-api-key:
-    description: 'Gemini API Key for release notes analysis'
+  jules-api-key:
+    description: 'Jules REST API Key for autonomous AI dependency analysis'
     required: true
+  webhook-url:
+    description: 'Webhook URL for push notifications (Discord/Slack)'
+    required: false
 
 runs:
   using: 'node24'

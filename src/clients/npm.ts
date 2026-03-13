@@ -49,3 +49,51 @@ export const isUpdateNeeded = (
 	const cleanCurrent = currentVersion.replace(/^[\^~]/, "");
 	return cleanCurrent !== latestVersion;
 };
+
+import type { PackageJson } from "../core/scanner/scanner.js";
+
+/**
+ * Validates whether a version string is a standard semver range that
+ * can be resolved by the public npm registry.
+ *
+ * Excludes package manager specific protocols like:
+ * - workspace:*   (pnpm internal linking)
+ * - catalog:      (pnpm multi-workspace version sharing)
+ * - npm:          (npm aliases)
+ * - file:         (local filesystem paths)
+ * - git+          (git repository links)
+ */
+export const isPublicRegistryVersion = (version: string): boolean => {
+	if (!version) return false;
+	const protocols = [
+		"workspace:",
+		"catalog:",
+		"npm:",
+		"file:",
+		"git+",
+		"http://",
+		"https://",
+	];
+	if (protocols.some((p) => version.startsWith(p))) return false;
+	return true;
+};
+
+/**
+ * Filters the dependencies in a PackageJson object, returning an array of
+ * dependency names that represent external, public-registry packages.
+ */
+export const getExternalDependencies = (pkg: PackageJson): string[] => {
+	const externalDeps: string[] = [];
+	const allDeps = {
+		...(pkg.dependencies || {}),
+		...(pkg.devDependencies || {}),
+	};
+
+	for (const [name, version] of Object.entries(allDeps)) {
+		if (isPublicRegistryVersion(version)) {
+			externalDeps.push(name);
+		}
+	}
+
+	return externalDeps;
+};
