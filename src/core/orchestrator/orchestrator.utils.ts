@@ -1,7 +1,7 @@
-import { dirname } from "node:path";
 import { getExternalDependencies } from "../../clients/npm.js";
 import type { DependencyUsage } from "../ast/ast.js";
 import type { PackageJson } from "../scanner/scanner.js";
+import { dirname } from "node:path";
 
 // ------------------------------------------------------------------
 // Context Interfaces (Payloads for Gemini)
@@ -33,6 +33,12 @@ export interface GeminiPromptPayload {
 	usages: DependencyUsage[];
 }
 
+export enum UpdateType {
+	MAJOR = 0,
+	MINOR = 1,
+	PATCH = 2,
+}
+
 export interface AggregatedDrift {
 	dependencyName: string;
 	currentVersions: Set<string>;
@@ -40,6 +46,7 @@ export interface AggregatedDrift {
 	payloads: GeminiPromptPayload[];
 	/** GitHub release notes for the target version, truncated to 3k chars */
 	releaseNotes: string | null;
+	priorityScore: number;
 }
 
 export type DependencyMap = Map<
@@ -48,13 +55,53 @@ export type DependencyMap = Map<
 >;
 
 // ------------------------------------------------------------------
+// Constants & Scoring
+// ------------------------------------------------------------------
+
+/**
+ * High-impact infrastructure packages that deserve priority weighting.
+ */
+const CORE_INFRASTRUCTURE = new Set([
+	"typescript",
+	"react",
+	"next",
+	"@angular/core",
+	"vue",
+	"redis",
+	"mongodb",
+	"aws-sdk",
+	"@aws-sdk/client-s3",
+	"amqplib",
+	"express",
+	"fastify",
+	"pg",
+	"prisma",
+]);
+
+/**
+ * Calculates a priority score where lower is higher priority.
+ * 1. Base score starts with UpdateType (Major=0, Minor=100, Patch=200).
+ * 2. If it's a CORE_INFRASTRUCTURE package, subtract 50 from its score.
+ */
+export const calculatePriorityScore = (
+	packageName: string,
+	updateType: UpdateType,
+): number => {
+	let score = updateType * 100;
+
+	if (CORE_INFRASTRUCTURE.has(packageName) || packageName.startsWith("@aws-sdk/")) {
+		score -= 50;
+	}
+
+	return score;
+};
+
+// ------------------------------------------------------------------
 // Internal Context Helpers
 // ------------------------------------------------------------------
 
 /**
  * Extracts a lightweight service description from package.json.
- * Priority: `description` → `depSync.aiContext` → empty string.
- * This yields a dense, 1-sentence explanation for near-zero token cost.
  */
 export const extractServiceDescription = (pkg: PackageJson): string => {
 	if (pkg.description && typeof pkg.description === "string") {
@@ -103,8 +150,7 @@ export const buildDependencyMap = (
 };
 
 /**
- * Assembles the base context payload for a single package. The usages array
- * will be populated subsequently by the AST extraction module.
+ * Assembles the base context payload for a single package.
  */
 export const buildPackagePayload = (
 	packageJsonPath: string,
@@ -125,6 +171,21 @@ export const buildPackagePayload = (
 			currentVersion,
 			latestVersion,
 		},
-		usages: [], // To be populated by AST scanning phase
+		usages: [],
 	};
+};
+
+/**
+ * Simple semver-ish update type detector.
+ */
+export const getUpdateType = (
+	current: string,
+	latest: string,
+): UpdateType => {
+	const c = current.replace(/^[\^~]/, "").split(".");
+	const l = latest.split(".");
+
+	if (c[0] !== l[0]) return UpdateType.MAJOR;
+	if (c[1] !== l[1]) return UpdateType.MINOR;
+	return UpdateType.PATCH;
 };

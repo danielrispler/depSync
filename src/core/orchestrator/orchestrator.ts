@@ -8,34 +8,33 @@ import {
 	buildDependencyMap,
 	buildPackagePayload,
 	type GeminiPromptPayload,
+	getUpdateType,
+	calculatePriorityScore,
 } from "./orchestrator.utils.js";
 
-// ------------------------------------------------------------------
-// Public Orchestrator Functions
-// ------------------------------------------------------------------
-
 /**
- * Main Orchestrator Pipeline
- * 1. Scans workspace for packages.
- * 2. Inverts dependency mappings to group by DependencyName.
- * 3. Fetches latest versions & compares drift.
- * 4. Fetches release notes from GitHub for drifted dependencies.
- * 5. Discovers TS files and performs AST extraction.
+ * Main Orchestrator Pipeline (Optimized)
+ * 1. Scans workspace and detects drifts using local semver.
+ * 2. Ranks drifts by Priority (Infra + Semver).
+ * 3. Selects TOP 4 candidates FIRST.
+ * 4. Only for the top 4: Fetches Release Notes and performs AST analysis.
  */
 export const analyzeMonorepoDrift = async (
 	workspaceRoot: string,
 	githubToken: string,
 ): Promise<AggregatedDrift[]> => {
-	// Step 1: Discover all package.json files
 	const packages = await scanWorkspace(workspaceRoot);
-
-	// Step 2: Aggregate by external dependency
 	const dependencyMap = buildDependencyMap(packages);
 
-	const drifts: AggregatedDrift[] = [];
+	const initialDrifts: Array<{
+		dep: string;
+		priorityScore: number;
+		currentVersions: Set<string>;
+		latestVersion: string;
+		usages: Array<{ path: string; pkg: any; currentVersion: string }>;
+	}> = [];
 
-	// Fetch latest versions sequentially to avoid spamming the registry
-	// if there are hundreds of dependencies.
+	// Phase 1: Rank and Filter (Local Only)
 	for (const [dep, usages] of dependencyMap.entries()) {
 		try {
 			const latestVersion = await getLatestVersion(dep);
@@ -45,40 +44,58 @@ export const analyzeMonorepoDrift = async (
 
 			if (outdatedUsages.length === 0) continue;
 
-			// Fetch release notes for the target version (fail-safe)
+			const currentVersions = new Set(outdatedUsages.map((u) => u.currentVersion));
+			const firstCurrent = Array.from(currentVersions)[0];
+			const updateType = getUpdateType(firstCurrent, latestVersion);
+			const priorityScore = calculatePriorityScore(dep, updateType);
+
+			initialDrifts.push({
+				dep,
+				priorityScore,
+				currentVersions,
+				latestVersion,
+				usages: outdatedUsages,
+			});
+		} catch (error) {
+			console.error(`Failed npm check for ${dep}: ${error}`);
+		}
+	}
+
+	// Sort and pick top 4
+	const topDrifts = initialDrifts
+		.sort((a, b) => a.priorityScore - b.priorityScore)
+		.slice(0, 4);
+
+	const finalDrifts: AggregatedDrift[] = [];
+
+	// Phase 2: Expensive Analysis (Release Notes + AST) for Top 4 Only
+	for (const drift of topDrifts) {
+		try {
 			const releaseNotes = await getReleaseNotesForDependency(
 				githubToken,
-				dep,
-				latestVersion,
+				drift.dep,
+				drift.latestVersion,
 			);
 
-			// We have a drifted dependency!
-			const currentVersions = new Set(
-				outdatedUsages.map((u) => u.currentVersion),
-			);
 			const payloads: GeminiPromptPayload[] = [];
-
-			// Create a lightweight, ephemeral Project for just this dependency's update cycle
 			const project = createProject();
 
-			for (const { path: pkgPath, pkg, currentVersion } of outdatedUsages) {
+			for (const { path: pkgPath, pkg, currentVersion } of drift.usages) {
 				const packageRoot = dirname(pkgPath);
 				const tsFiles = await scanTypeScriptFiles(packageRoot);
 
-				// Add files to project (in-memory)
 				project.addSourceFilesAtPaths(tsFiles);
 
 				const packagePayload = buildPackagePayload(
 					pkgPath,
 					pkg,
-					dep,
+					drift.dep,
 					currentVersion,
-					latestVersion,
+					drift.latestVersion,
 				);
 
-				// Extract AST context for this specific dependency
 				for (const sourceFile of project.getSourceFiles()) {
-					const usage = extractDependencyUsages(sourceFile, dep);
+					const usage = extractDependencyUsages(sourceFile, drift.dep);
 					if (usage) {
 						packagePayload.usages.push(usage);
 					}
@@ -88,33 +105,25 @@ export const analyzeMonorepoDrift = async (
 					payloads.push(packagePayload);
 				}
 
-				// CRITICAL: Clear memory after processing this package to prevent heap explosion
-				// on massive monorepos. We drop the source files so the GC can claim them.
 				for (const sourceFile of project.getSourceFiles()) {
 					project.removeSourceFile(sourceFile);
 				}
 			}
 
-			// In ts-morph 20+, calling removeSourceFile on all files is sufficient
-			// for memory clearing without a dedicated dispose() method.
-
 			if (payloads.length > 0) {
-				drifts.push({
-					dependencyName: dep,
-					currentVersions,
-					latestVersion,
+				finalDrifts.push({
+					dependencyName: drift.dep,
+					currentVersions: drift.currentVersions,
+					latestVersion: drift.latestVersion,
 					payloads,
 					releaseNotes,
+					priorityScore: drift.priorityScore,
 				});
 			}
 		} catch (error) {
-			// If npm fetch fails for a single package (e.g., private registry without auth),
-			// log safely and continue with the rest of the monorepo instead of crashing entirely.
-			const msg = error instanceof Error ? error.message : String(error);
-			// Use core.debug to avoid leaking internal details in action logs
-			console.error(`Failed to analyze drift for dependency ${dep}: ${msg}`);
+			console.error(`Failed deep analysis for ${drift.dep}: ${error}`);
 		}
 	}
 
-	return drifts;
+	return finalDrifts;
 };

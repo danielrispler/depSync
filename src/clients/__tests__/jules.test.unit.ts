@@ -14,7 +14,8 @@ describe("createJulesSession", () => {
 		dependencyName: "lodash",
 		currentVersions: new Set(["1.0.0"]),
 		latestVersion: "2.0.0",
-		releaseNotes: "## Breaking Changes\n- Removed cloneDeep",
+		releaseNotes: "Critical security fix for potential XSS vulnerability.",
+		priorityScore: 50,
 		payloads: [
 			{
 				package: {

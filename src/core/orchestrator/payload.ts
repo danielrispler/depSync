@@ -40,13 +40,15 @@ export interface ProcessedCaller {
 	line: number;
 }
 
-const INSTRUCTION_TEXT = `You are an expert migration assistant. The target dependency has breaking changes outlined in the [Release Notes]. The user's local service ([Service Description]) uses it as shown in the [AST Context]. Generate the exact code required to safely migrate the user's code to the new version.
+const INSTRUCTION_TEXT = `You are an expert migration assistant. The target dependency has breaking changes outlined in the [Release Notes]. The monorepo context is provided in the [AST Context]. Generate the exact code required to safely migrate the user's code to the new version.
 
 CRITICAL INSTRUCTIONS:
-1. Analyze the 'releaseNotes' to understand what changed in the dependency.
-2. For each usage, check the 'serviceName' and 'serviceDescription' to understand the service's domain.
-3. If an enclosing function is marked as 'isExported: true', changing its signature or return type is a high-risk BREAKING CHANGE to the rest of the monorepo.
-4. Use the 'localCallers' array to understand the immediate localized data flow.
+1. Explain clearly WHY this update is important and how it will benefit the user (e.g., performance, security, features).
+2. Evaluate the "AST footprint" of this dependency:
+   - If the AST shows this package is heavily imported across multiple services/files, explicitly flag it as a **High-Risk structural update**.
+   - If it is isolated to one or two files with minimal internal exposure, flag it as **Low-Risk**.
+3. Use this footprint analysis to explain HOW this update is safe to perform (e.g. "We only use this in one non-critical service").
+4. If an enclosing function is marked as 'isExported: true', changing its signature or return type is a high-risk BREAKING CHANGE to the rest of the monorepo.
 5. Respond with a technical analysis and specific, targeted code suggestions for any required fixes.`;
 
 /**
@@ -64,15 +66,15 @@ export const buildGeminiPayload = (
 				const enclosingFunc: ProcessedEnclosingFunction | null =
 					ctx.enclosingFunction
 						? {
-								name: ctx.enclosingFunction.name,
-								signature: ctx.enclosingFunction.signature,
-								body: ctx.enclosingFunction.body,
-								isExported: ctx.enclosingFunction.isExported,
-								localCallers: ctx.localCallers.map((caller) => ({
-									statement: caller.statement,
-									line: caller.line,
-								})),
-							}
+							name: ctx.enclosingFunction.name,
+							signature: ctx.enclosingFunction.signature,
+							body: ctx.enclosingFunction.body,
+							isExported: ctx.enclosingFunction.isExported,
+							localCallers: ctx.localCallers.map((caller) => ({
+								statement: caller.statement,
+								line: caller.line,
+							})),
+						}
 						: null;
 
 				return {
