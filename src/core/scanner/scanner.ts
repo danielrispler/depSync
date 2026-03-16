@@ -116,33 +116,3 @@ export const scanTypeScriptFiles = async (
 	const globber = await deps.createGlobber(patterns);
 	return globber.glob();
 };
-
-import { readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
-
-/**
- * Safely attempts to read the README.md file from a package directory.
- * Fails gracefully and returns null if the file doesn't exist or is unreadable.
- * Truncates massive READMEs to prevent LLM token explosion (default: 10,000 chars).
- */
-export const tryReadPackageReadme = (
-	packageJsonPath: string,
-	maxChars = 10000,
-): string | null => {
-	try {
-		const pkgDir = dirname(packageJsonPath);
-		const readmePath = join(pkgDir, "README.md");
-		const stat = statSync(readmePath);
-
-		if (!stat.isFile()) return null;
-
-		const content = readFileSync(readmePath, "utf-8");
-		if (content.length > maxChars) {
-			return `${content.slice(0, maxChars)}\n\n...[README TRUNCATED BY DEPSYNC]`;
-		}
-		return content;
-	} catch {
-		// README is optional; safe to ignore missing files
-		return null;
-	}
-};

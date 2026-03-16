@@ -1,4 +1,4 @@
-import type { GeminiPromptPayload } from "../core/orchestrator/orchestrator.utils.js";
+import type { AggregatedDrift } from "../core/orchestrator/orchestrator.utils.js";
 import { buildGeminiPayload } from "../core/orchestrator/payload.js";
 
 export interface JulesSessionRequest {
@@ -30,22 +30,25 @@ const defaultDependencies: JulesDependencies = {
 
 /**
  * Creates an autonomous session in the Jules API for dependency analysis.
- * Strictly uses native fetch and follows the v1alpha REST specification.
+ * Accepts a full AggregatedDrift to provide Jules with release notes,
+ * service descriptions, and AST context in a single structured prompt.
  */
 export const createJulesSession = async (
 	apiKey: string,
 	repoOwner: string,
 	repoName: string,
-	dependencyName: string,
-	payload: GeminiPromptPayload,
+	drift: AggregatedDrift,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<JulesSessionResponse> => {
 	const url = "https://jules.googleapis.com/v1alpha/sessions";
 
 	const body: JulesSessionRequest = {
-		title: `depSync: Update ${dependencyName}`,
-		// We use the same flattened, token-efficient payload structured for LLMs
-		prompt: `Analyze this AST context for breaking changes and provide code fixes. \n\n ${buildGeminiPayload(dependencyName, payload.usages)}`,
+		title: `depSync: Update ${drift.dependencyName}`,
+		prompt: buildGeminiPayload(
+			drift.dependencyName,
+			drift.payloads,
+			drift.releaseNotes,
+		),
 		sourceContext: {
 			source: `sources/github-${repoOwner}-${repoName}`,
 			githubRepoContext: {

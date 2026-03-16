@@ -1,57 +1,82 @@
 import { describe, expect, it } from "vitest";
-import type { DependencyUsage } from "../../ast/ast.js";
-import { buildGeminiPayload, type GeminiPromptPayload } from "../payload.js";
+import type { GeminiPromptPayload } from "../orchestrator.utils.js";
+import {
+	buildGeminiPayload,
+	type GeminiPromptPayload as GeminiOutput,
+} from "../payload.js";
 
 describe("payload generator", () => {
 	const mockDependencyName = "test-pkg";
 
-	it("should generate a valid payload with empty usages", () => {
-		const usages: DependencyUsage[] = [];
-		const resultString = buildGeminiPayload(mockDependencyName, usages);
-		const result = JSON.parse(resultString) as GeminiPromptPayload;
+	it("should generate a valid payload with empty payloads array", () => {
+		const payloads: GeminiPromptPayload[] = [];
+		const resultString = buildGeminiPayload(mockDependencyName, payloads, null);
+		const result = JSON.parse(resultString) as GeminiOutput;
 
 		expect(result.dependencyName).toBe(mockDependencyName);
 		expect(result.usages).toEqual([]);
-		expect(result.instruction).toContain("CRITICAL INSTRUCTIONS");
+		expect(result.releaseNotes).toBeNull();
+		expect(result.instruction).toContain("expert migration assistant");
 	});
 
-	it("should correctly map a complex DependencyUsage into flattened ProcessedUsages", () => {
-		const usages: DependencyUsage[] = [
+	it("should correctly map complex payloads into flattened ProcessedUsages with service context", () => {
+		const payloads: GeminiPromptPayload[] = [
 			{
-				file: "/src/index.ts",
-				importStatement: "import { testFn } from 'test-pkg';",
+				package: {
+					packageName: "@mycompany/auth-service",
+					version: "1.0.0",
+					packagePath: "/workspace/apps/auth",
+					serviceDescription: "Handles JWT Authentication",
+				},
+				update: {
+					dependencyName: "test-pkg",
+					currentVersion: "1.0.0",
+					latestVersion: "2.0.0",
+				},
 				usages: [
 					{
-						statement: "testFn(data);",
-						line: 10,
-						localCallers: [
+						file: "/src/index.ts",
+						importStatement: "import { testFn } from 'test-pkg';",
+						usages: [
 							{
-								statement: "wrapper();",
-								line: 25,
+								statement: "testFn(data);",
+								line: 10,
+								localCallers: [
+									{
+										statement: "wrapper();",
+										line: 25,
+										enclosingFunction: null,
+									},
+								],
+								enclosingFunction: {
+									name: "wrapper",
+									signature: "const wrapper = (data: any) =>",
+									body: "{ testFn(data); }",
+									isExported: true,
+								},
+							},
+							{
+								statement: "testFn(otherData);",
+								line: 40,
+								localCallers: [],
 								enclosingFunction: null,
 							},
 						],
-						enclosingFunction: {
-							name: "wrapper",
-							signature: "const wrapper = (data: any) =>",
-							body: "{ testFn(data); }",
-							isExported: true,
-						},
-					},
-					{
-						statement: "testFn(otherData);",
-						line: 40,
-						localCallers: [],
-						enclosingFunction: null, // module top-level
 					},
 				],
 			},
 		];
 
-		const resultString = buildGeminiPayload(mockDependencyName, usages);
-		const result = JSON.parse(resultString) as GeminiPromptPayload;
+		const releaseNotes = "## Breaking Changes\n- Removed testFn";
+		const resultString = buildGeminiPayload(
+			mockDependencyName,
+			payloads,
+			releaseNotes,
+		);
+		const result = JSON.parse(resultString) as GeminiOutput;
 
 		expect(result.dependencyName).toBe(mockDependencyName);
+		expect(result.releaseNotes).toBe(releaseNotes);
 		expect(result.usages).toHaveLength(2);
 
 		// Check the first processed usage (which has an enclosing function)
@@ -59,6 +84,8 @@ describe("payload generator", () => {
 		expect(firstUsage).toBeDefined();
 		if (!firstUsage) throw new Error("Expected first usage to be defined");
 
+		expect(firstUsage.serviceName).toBe("@mycompany/auth-service");
+		expect(firstUsage.serviceDescription).toBe("Handles JWT Authentication");
 		expect(firstUsage.file).toBe("/src/index.ts");
 		expect(firstUsage.callingStatement).toBe("testFn(data);");
 		expect(firstUsage.line).toBe(10);
@@ -76,6 +103,7 @@ describe("payload generator", () => {
 		expect(secondUsage).toBeDefined();
 		if (!secondUsage) throw new Error("Expected second usage to be defined");
 
+		expect(secondUsage.serviceName).toBe("@mycompany/auth-service");
 		expect(secondUsage.callingStatement).toBe("testFn(otherData);");
 		expect(secondUsage.line).toBe(40);
 		expect(secondUsage.enclosingFunction).toBeNull();

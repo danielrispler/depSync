@@ -1,4 +1,5 @@
 import { dirname } from "node:path";
+import { getReleaseNotesForDependency } from "../../clients/changelog.js";
 import { getLatestVersion, isUpdateNeeded } from "../../clients/npm.js";
 import { createProject, extractDependencyUsages } from "../ast/ast.js";
 import { scanTypeScriptFiles, scanWorkspace } from "../scanner/scanner.js";
@@ -17,11 +18,13 @@ import {
  * Main Orchestrator Pipeline
  * 1. Scans workspace for packages.
  * 2. Inverts dependency mappings to group by DependencyName.
- * 3. (Drafted) Fetches latest versions & compares drift.
- * 4. (Drafted) Discovers TS files and performs AST extraction.
+ * 3. Fetches latest versions & compares drift.
+ * 4. Fetches release notes from GitHub for drifted dependencies.
+ * 5. Discovers TS files and performs AST extraction.
  */
 export const analyzeMonorepoDrift = async (
 	workspaceRoot: string,
+	githubToken: string,
 ): Promise<AggregatedDrift[]> => {
 	// Step 1: Discover all package.json files
 	const packages = await scanWorkspace(workspaceRoot);
@@ -31,8 +34,7 @@ export const analyzeMonorepoDrift = async (
 
 	const drifts: AggregatedDrift[] = [];
 
-	// Optional optimization: If we had a batch endpoint, we could fetch all at once.
-	// For now, we fetch latest versions sequentially to avoid spamming the registry
+	// Fetch latest versions sequentially to avoid spamming the registry
 	// if there are hundreds of dependencies.
 	for (const [dep, usages] of dependencyMap.entries()) {
 		try {
@@ -42,6 +44,13 @@ export const analyzeMonorepoDrift = async (
 			);
 
 			if (outdatedUsages.length === 0) continue;
+
+			// Fetch release notes for the target version (fail-safe)
+			const releaseNotes = await getReleaseNotesForDependency(
+				githubToken,
+				dep,
+				latestVersion,
+			);
 
 			// We have a drifted dependency!
 			const currentVersions = new Set(
@@ -95,12 +104,15 @@ export const analyzeMonorepoDrift = async (
 					currentVersions,
 					latestVersion,
 					payloads,
+					releaseNotes,
 				});
 			}
 		} catch (error) {
 			// If npm fetch fails for a single package (e.g., private registry without auth),
 			// log safely and continue with the rest of the monorepo instead of crashing entirely.
-			console.error(`Failed to analyze drift for dependency ${dep}:`, error);
+			const msg = error instanceof Error ? error.message : String(error);
+			// Use core.debug to avoid leaking internal details in action logs
+			console.error(`Failed to analyze drift for dependency ${dep}: ${msg}`);
 		}
 	}
 

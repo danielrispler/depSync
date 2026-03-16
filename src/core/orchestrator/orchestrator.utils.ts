@@ -1,7 +1,7 @@
 import { dirname } from "node:path";
 import { getExternalDependencies } from "../../clients/npm.js";
 import type { DependencyUsage } from "../ast/ast.js";
-import { type PackageJson, tryReadPackageReadme } from "../scanner/scanner.js";
+import type { PackageJson } from "../scanner/scanner.js";
 
 // ------------------------------------------------------------------
 // Context Interfaces (Payloads for Gemini)
@@ -14,8 +14,8 @@ export interface PackageContext {
 	version: string;
 	/** The absolute directory holding this package */
 	packagePath: string;
-	/** The package's README text to provide domain knowledge to the LLM */
-	readmeContent: string | null;
+	/** Dense 1-sentence domain description for near-zero token cost */
+	serviceDescription: string;
 }
 
 export interface UpdateContext {
@@ -38,12 +38,40 @@ export interface AggregatedDrift {
 	currentVersions: Set<string>;
 	latestVersion: string;
 	payloads: GeminiPromptPayload[];
+	/** GitHub release notes for the target version, truncated to 3k chars */
+	releaseNotes: string | null;
 }
 
 export type DependencyMap = Map<
 	string,
 	Array<{ path: string; pkg: PackageJson; currentVersion: string }>
 >;
+
+// ------------------------------------------------------------------
+// Internal Context Helpers
+// ------------------------------------------------------------------
+
+/**
+ * Extracts a lightweight service description from package.json.
+ * Priority: `description` → `depSync.aiContext` → empty string.
+ * This yields a dense, 1-sentence explanation for near-zero token cost.
+ */
+export const extractServiceDescription = (pkg: PackageJson): string => {
+	if (pkg.description && typeof pkg.description === "string") {
+		return pkg.description;
+	}
+
+	const depSyncConfig = pkg.depSync as { aiContext?: string } | undefined;
+	if (depSyncConfig?.aiContext && typeof depSyncConfig.aiContext === "string") {
+		return depSyncConfig.aiContext;
+	}
+
+	return "";
+};
+
+// ------------------------------------------------------------------
+// Public Builders
+// ------------------------------------------------------------------
 
 /**
  * Inverts the dependency mapping from Package -> Dependencies to Dependency -> Packages.
@@ -90,7 +118,7 @@ export const buildPackagePayload = (
 			packageName: pkg.name || "unknown",
 			version: pkg.version || "0.0.0",
 			packagePath: dirname(packageJsonPath),
-			readmeContent: tryReadPackageReadme(packageJsonPath),
+			serviceDescription: extractServiceDescription(pkg),
 		},
 		update: {
 			dependencyName,

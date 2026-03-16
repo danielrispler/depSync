@@ -12,7 +12,7 @@ const handleScanWorkflow = async (
 	workspaceRoot: string,
 ) => {
 	core.info(`🚀 depSync: Starting monorepo analysis...`);
-	const drifts = await analyzeMonorepoDrift(workspaceRoot);
+	const drifts = await analyzeMonorepoDrift(workspaceRoot, githubToken);
 
 	if (drifts.length === 0) {
 		core.info("✅ No dependency drifts detected.");
@@ -29,8 +29,7 @@ const handleScanWorkflow = async (
 				julesApiKey,
 				owner,
 				repo,
-				drift.dependencyName,
-				drift.payloads[0],
+				drift,
 			);
 
 			core.info(`📅 Opening GitHub issue for ${drift.dependencyName}...`);

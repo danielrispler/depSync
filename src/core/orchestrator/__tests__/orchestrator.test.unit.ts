@@ -1,30 +1,51 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { PackageJson } from "../../scanner/scanner.js";
-import { buildPackagePayload } from "../orchestrator.utils.js";
-
-vi.mock("../../../clients/npm.js");
-vi.mock("../../scanner/scanner.js", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("../../scanner/scanner.js")>();
-	return {
-		...actual,
-		tryReadPackageReadme: vi.fn(),
-	};
-});
-
-// Auto-mock fs to avoid hitting real disks during tests.
-// Vitest will automatically replace all exports with vi.fn()
-vi.mock("node:fs");
+import {
+	buildPackagePayload,
+	extractServiceDescription,
+} from "../orchestrator.utils.js";
 
 describe("Orchestrator Utilities", () => {
-	describe("buildPackagePayload", () => {
-		it("assembles the base Gemini payload correctly", async () => {
-			const { tryReadPackageReadme } = await import("../../scanner/scanner.js");
-			vi.mocked(tryReadPackageReadme).mockReturnValueOnce("# Mock Readme");
+	describe("extractServiceDescription", () => {
+		it("should return the description field when present", () => {
+			const pkg: PackageJson = {
+				name: "test",
+				description: "Handles JWT Authentication",
+			};
+			expect(extractServiceDescription(pkg)).toBe("Handles JWT Authentication");
+		});
 
+		it("should fallback to depSync.aiContext when description is missing", () => {
+			const pkg: PackageJson = {
+				name: "test",
+				depSync: { aiContext: "Core payment processing service" },
+			};
+			expect(extractServiceDescription(pkg)).toBe(
+				"Core payment processing service",
+			);
+		});
+
+		it("should return empty string when neither field exists", () => {
+			const pkg: PackageJson = { name: "test" };
+			expect(extractServiceDescription(pkg)).toBe("");
+		});
+
+		it("should prefer description over depSync.aiContext", () => {
+			const pkg: PackageJson = {
+				name: "test",
+				description: "Primary description",
+				depSync: { aiContext: "Fallback context" },
+			};
+			expect(extractServiceDescription(pkg)).toBe("Primary description");
+		});
+	});
+
+	describe("buildPackagePayload", () => {
+		it("assembles the base Gemini payload with serviceDescription", () => {
 			const pkg: PackageJson = {
 				name: "@mock/service",
 				version: "2.1.0",
+				description: "Handles user registration",
 			};
 
 			const payload = buildPackagePayload(
@@ -38,7 +59,9 @@ describe("Orchestrator Utilities", () => {
 			expect(payload.package.packageName).toBe("@mock/service");
 			expect(payload.package.version).toBe("2.1.0");
 			expect(payload.package.packagePath).toBe("/workspace/packages/service");
-			expect(payload.package.readmeContent).toBe("# Mock Readme");
+			expect(payload.package.serviceDescription).toBe(
+				"Handles user registration",
+			);
 
 			expect(payload.update.dependencyName).toBe("lodash");
 			expect(payload.update.currentVersion).toBe("^4.17.20");

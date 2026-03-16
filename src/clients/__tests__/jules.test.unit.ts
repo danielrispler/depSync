@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GeminiPromptPayload } from "../../core/orchestrator/orchestrator.utils.js";
+import type { AggregatedDrift } from "../../core/orchestrator/orchestrator.utils.js";
 import { createJulesSession } from "../jules.js";
 
 describe("createJulesSession", () => {
@@ -10,20 +10,27 @@ describe("createJulesSession", () => {
 	const mockApiKey = "test-api-key";
 	const mockOwner = "owner";
 	const mockRepo = "repo";
-	const mockDep = "lodash";
-	const mockPayload: GeminiPromptPayload = {
-		package: {
-			packageName: "test-pkg",
-			version: "1.0.0",
-			packagePath: "/test",
-			readmeContent: null,
-		},
-		update: {
-			dependencyName: "lodash",
-			currentVersion: "1.0.0",
-			latestVersion: "2.0.0",
-		},
-		usages: [],
+	const mockDrift: AggregatedDrift = {
+		dependencyName: "lodash",
+		currentVersions: new Set(["1.0.0"]),
+		latestVersion: "2.0.0",
+		releaseNotes: "## Breaking Changes\n- Removed cloneDeep",
+		payloads: [
+			{
+				package: {
+					packageName: "test-pkg",
+					version: "1.0.0",
+					packagePath: "/test",
+					serviceDescription: "Handles user auth",
+				},
+				update: {
+					dependencyName: "lodash",
+					currentVersion: "1.0.0",
+					latestVersion: "2.0.0",
+				},
+				usages: [],
+			},
+		],
 	};
 
 	it("should call the Jules API with correct headers and body", async () => {
@@ -37,8 +44,7 @@ describe("createJulesSession", () => {
 			mockApiKey,
 			mockOwner,
 			mockRepo,
-			mockDep,
-			mockPayload,
+			mockDrift,
 			{ fetch: mockFetch as any },
 		);
 
@@ -56,7 +62,8 @@ describe("createJulesSession", () => {
 
 		const body = JSON.parse(mockFetch.mock.calls[0][1].body);
 		expect(body.sourceContext.source).toBe("sources/github-owner-repo");
-		expect(body.prompt).toContain("Analyze this AST context");
+		expect(body.prompt).toContain("expert migration assistant");
+		expect(body.prompt).toContain("lodash");
 	});
 
 	it("should throw a specific error on 429 rate limit", async () => {
@@ -66,16 +73,9 @@ describe("createJulesSession", () => {
 		});
 
 		await expect(
-			createJulesSession(
-				mockApiKey,
-				mockOwner,
-				mockRepo,
-				mockDep,
-				mockPayload,
-				{
-					fetch: mockFetch as any,
-				},
-			),
+			createJulesSession(mockApiKey, mockOwner, mockRepo, mockDrift, {
+				fetch: mockFetch as any,
+			}),
 		).rejects.toThrow(/rate limit exceeded/);
 	});
 
@@ -87,16 +87,9 @@ describe("createJulesSession", () => {
 		});
 
 		await expect(
-			createJulesSession(
-				mockApiKey,
-				mockOwner,
-				mockRepo,
-				mockDep,
-				mockPayload,
-				{
-					fetch: mockFetch as any,
-				},
-			),
+			createJulesSession(mockApiKey, mockOwner, mockRepo, mockDrift, {
+				fetch: mockFetch as any,
+			}),
 		).rejects.toThrow(/status 500/);
 	});
 });

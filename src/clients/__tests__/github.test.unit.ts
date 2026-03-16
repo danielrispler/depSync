@@ -21,9 +21,14 @@ describe("reportDriftAsIssue", () => {
 		dependencyName: "react",
 		currentVersions: new Set(["17.0.0"]),
 		latestVersion: "18.0.0",
+		releaseNotes: "## Breaking Changes\n- New JSX Transform",
 		payloads: [
 			{
-				package: { packageName: "web", version: "1.0.0" },
+				package: {
+					packageName: "web",
+					version: "1.0.0",
+					serviceDescription: "Main web application",
+				},
 				update: { currentVersion: "17.0.0", latestVersion: "18.0.0" },
 				usages: [{}, {}],
 			},
@@ -64,7 +69,12 @@ describe("reportDriftAsIssue", () => {
 			rest: {
 				issues: {
 					listForRepo: vi.fn().mockResolvedValue({
-						data: [{ title: "[depSync] Dependency Update: react", number: 42 }],
+						data: [
+							{
+								title: "[depSync] Dependency Update: react",
+								number: 42,
+							},
+						],
 					}),
 					create: vi.fn(),
 					update: vi.fn().mockResolvedValue({ data: {} }),
@@ -83,5 +93,45 @@ describe("reportDriftAsIssue", () => {
 			}),
 		);
 		expect(mockOctokit.rest.issues.create).not.toHaveBeenCalled();
+	});
+
+	it("should include release notes in the issue body", async () => {
+		const mockOctokit = {
+			rest: {
+				issues: {
+					listForRepo: vi.fn().mockResolvedValue({ data: [] }),
+					create: vi.fn().mockResolvedValue({ data: { number: 1 } }),
+					update: vi.fn(),
+				},
+			},
+		};
+
+		await reportDriftAsIssue(mockToken, mockDrift, mockJulesSession, {
+			getOctokit: () => mockOctokit as any,
+		});
+
+		const body = mockOctokit.rest.issues.create.mock.calls[0][0].body;
+		expect(body).toContain("Release Notes");
+		expect(body).toContain("Breaking Changes");
+	});
+
+	it("should include service description in the packages table", async () => {
+		const mockOctokit = {
+			rest: {
+				issues: {
+					listForRepo: vi.fn().mockResolvedValue({ data: [] }),
+					create: vi.fn().mockResolvedValue({ data: { number: 1 } }),
+					update: vi.fn(),
+				},
+			},
+		};
+
+		await reportDriftAsIssue(mockToken, mockDrift, mockJulesSession, {
+			getOctokit: () => mockOctokit as any,
+		});
+
+		const body = mockOctokit.rest.issues.create.mock.calls[0][0].body;
+		expect(body).toContain("Main web application");
+		expect(body).toContain("Description");
 	});
 });
