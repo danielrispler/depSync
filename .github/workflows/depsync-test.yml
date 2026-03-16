@@ -19,6 +19,7 @@ jobs:
     if: >
       github.event_name != 'issue_comment' || 
       contains(github.event.comment.body, '/fix') || 
+      contains(github.event.comment.body, '/close') || 
       contains(github.event.comment.body, '/dry-run')
 
     steps:

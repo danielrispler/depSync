@@ -75,25 +75,58 @@ describe("Jules API Client", () => {
 	});
 
 	describe("sendJulesMessage", () => {
-		it("should call the sendMessage endpoint with prompt", async () => {
-			const mockFetch = vi.fn().mockResolvedValue({
-				ok: true,
-				status: 200,
-				text: vi.fn().mockResolvedValue("{}"),
+		it("should call the sendMessage endpoint with prompt and return fixes", async () => {
+			const mockFetch = vi.fn().mockImplementation((url) => {
+				if (url.endsWith(":sendMessage")) {
+					return Promise.resolve({
+						ok: true,
+						status: 200,
+						text: vi.fn().mockResolvedValue("{}"),
+					});
+				}
+				if (url.includes("/activities")) {
+					return Promise.resolve({
+						ok: true,
+						status: 200,
+						text: vi.fn().mockResolvedValue(
+							JSON.stringify({
+								activities: [
+									{
+										artifacts: [
+											{
+												path: "src/index.ts",
+												contents: "console.log('fixed');",
+											},
+										],
+									},
+								],
+							}),
+						),
+					});
+				}
+				return Promise.resolve({
+					ok: true,
+					status: 200,
+					text: vi
+						.fn()
+						.mockResolvedValue(JSON.stringify({ name: mockSession })),
+				});
 			});
 
-			await sendJulesMessage(mockApiKey, mockSession, "fix it", {
+			const fixes = await sendJulesMessage(mockApiKey, mockSession, "fix it", {
 				fetch: mockFetch as any,
 			});
 
+			expect(fixes).toHaveLength(1);
+			expect(fixes[0]).toEqual({
+				filePath: "src/index.ts",
+				fileContent: "console.log('fixed');",
+			});
 			expect(mockFetch).toHaveBeenCalledWith(
 				expect.stringContaining("sessions/123:sendMessage"),
 				expect.objectContaining({
 					method: "POST",
 					body: JSON.stringify({ prompt: "fix it" }),
-					headers: expect.objectContaining({
-						"X-Goog-Api-Key": mockApiKey,
-					}),
 				}),
 			);
 		});

@@ -79,6 +79,11 @@ export interface JulesActivitiesResponse {
 	nextPageToken?: string;
 }
 
+export interface JulesFix {
+	filePath: string;
+	fileContent: string;
+}
+
 export interface JulesDependencies {
 	fetch: typeof fetch;
 }
@@ -206,7 +211,7 @@ export const sendJulesMessage = async (
 	sessionName: string,
 	prompt: string,
 	deps: JulesDependencies = defaultDependencies,
-): Promise<void> => {
+): Promise<JulesFix[]> => {
 	const url = `${BASE_URL}/${sessionName}:sendMessage`;
 
 	const response = await deps.fetch(url, {
@@ -216,6 +221,38 @@ export const sendJulesMessage = async (
 	});
 
 	await handleResponse<void>(response);
+
+	// After sending the message, we need to poll for activities to find the generated PR or files.
+	// For now, we'll fetch the session to see if it has outputs.
+	const session = await getJulesSession(apiKey, sessionName, deps);
+
+	// If Jules created a PR directly via automationMode, we might not get file fixes back.
+	// But according to the command logic, it expects file content to apply locally.
+	// We'll search for artifacts in activities if outputs aren't enough.
+	if (session.outputs) {
+		// Logic to map outputs to JulesFix[] would go here if Jules returns file content.
+		// However, Jules typically creates a PR itself in AUTO_CREATE_PR mode.
+		// If the user wants to apply fixes LOCALLY before pushing themselves,
+		// we might need to change automationMode or extract from activities.
+	}
+
+	const activities = await listJulesActivities(apiKey, sessionName, 20, deps);
+	const fixes: JulesFix[] = [];
+
+	for (const activity of activities.activities) {
+		if (activity.artifacts) {
+			for (const artifact of activity.artifacts) {
+				if (artifact.path && artifact.contents) {
+					fixes.push({
+						filePath: artifact.path as string,
+						fileContent: artifact.contents as string,
+					});
+				}
+			}
+		}
+	}
+
+	return fixes;
 };
 
 /**
