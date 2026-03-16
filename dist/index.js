@@ -258720,6 +258720,171 @@ exports.getExternalDependencies = getExternalDependencies;
 
 /***/ }),
 
+/***/ 2618:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.handleCloseCommand = void 0;
+const core = __importStar(__nccwpck_require__(6966));
+const github_js_1 = __nccwpck_require__(9294);
+const jules_js_1 = __nccwpck_require__(3054);
+const notifier_js_1 = __nccwpck_require__(6451);
+const handleCloseCommand = async (githubToken, julesApiKey, sessionName, issueNumber, commentId, webhookUrl) => {
+    try {
+        await (0, github_js_1.addCommentReaction)(githubToken, commentId, "rocket");
+        await (0, jules_js_1.deleteJulesSession)(julesApiKey, sessionName);
+        await (0, github_js_1.closeIssue)(githubToken, issueNumber);
+        await (0, notifier_js_1.sendNotification)(webhookUrl, `🧹 Jules session for issue #${issueNumber} has been terminated.`);
+    }
+    catch (error) {
+        core.error(`❌ Failed /close flow: ${error}`);
+    }
+};
+exports.handleCloseCommand = handleCloseCommand;
+
+
+/***/ }),
+
+/***/ 3137:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.handleFixCommand = void 0;
+const fs = __importStar(__nccwpck_require__(3024));
+const core = __importStar(__nccwpck_require__(6966));
+const github = __importStar(__nccwpck_require__(9512));
+const github_js_1 = __nccwpck_require__(9294);
+const jules_js_1 = __nccwpck_require__(3054);
+const notifier_js_1 = __nccwpck_require__(6451);
+const git_js_1 = __nccwpck_require__(8584);
+const handleFixCommand = async (githubToken, julesApiKey, sessionName, issueNumber, commentId, webhookUrl) => {
+    const octokit = github.getOctokit(githubToken);
+    const { owner, repo } = github.context.repo;
+    try {
+        await (0, github_js_1.addCommentReaction)(githubToken, commentId, "eyes");
+        await octokit.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: issueNumber,
+            body: `🚀 Jules AI is generating code fixes and preparing a Pull Request...`,
+        });
+        // 1. Get fixes from Jules
+        const fixes = await (0, jules_js_1.sendJulesMessage)(julesApiKey, sessionName, "Generate a Pull Request fixing the outlined breaking changes.");
+        // 2. Apply fixes & Git Ops
+        const branchName = `depsync/fix-issue-${issueNumber}`;
+        git_js_1.gitOps.configureUser();
+        git_js_1.gitOps.createBranch(branchName);
+        for (const fix of fixes) {
+            core.info(`📝 Applying fix to ${fix.filePath}...`);
+            fs.writeFileSync(fix.filePath, fix.fileContent);
+        }
+        git_js_1.gitOps.commitAll("chore: automated dependency fix by depSync");
+        const remoteUrl = `https://x-access-token:${githubToken}@github.com/${owner}/${repo}.git`;
+        git_js_1.gitOps.push(remoteUrl, branchName, true);
+        // 3. Create PR
+        core.info("🎁 Creating Pull Request...");
+        const { data: pr } = await octokit.rest.pulls.create({
+            owner,
+            repo,
+            title: `[depSync] Fix for Issue #${issueNumber}`,
+            head: branchName,
+            base: "main",
+            body: `This PR was automatically generated by Jules AI in response to issue #${issueNumber}.\n\nCloses #${issueNumber}`,
+        });
+        await (0, notifier_js_1.sendNotification)(webhookUrl, `✅ Jules AI created PR #${pr.number} for issue #${issueNumber}.`);
+    }
+    catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        core.error(`❌ Failed /fix flow: ${msg}`);
+        await octokit.rest.issues.createComment({
+            owner,
+            repo,
+            issue_number: issueNumber,
+            body: `❌ **Failed to generate PR**: ${msg}`,
+        });
+    }
+    finally {
+        // ALWAYS cleanup
+        core.info("🧹 Cleaning up Jules session and closing issue...");
+        await (0, jules_js_1.deleteJulesSession)(julesApiKey, sessionName).catch((e) => core.warning(`Cleanup failed: ${e.message}`));
+        await (0, github_js_1.closeIssue)(githubToken, issueNumber);
+    }
+};
+exports.handleFixCommand = handleFixCommand;
+
+
+/***/ }),
+
 /***/ 4111:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -259072,15 +259237,10 @@ exports.analyzeMonorepoDrift = analyzeMonorepoDrift;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getUpdateType = exports.buildPackagePayload = exports.buildDependencyMap = exports.extractServiceDescription = exports.calculatePriorityScore = exports.UpdateType = void 0;
-const npm_js_1 = __nccwpck_require__(1816);
+exports.getUpdateType = exports.buildPackagePayload = exports.buildDependencyMap = exports.extractServiceDescription = exports.calculatePriorityScore = void 0;
 const node_path_1 = __nccwpck_require__(6760);
-var UpdateType;
-(function (UpdateType) {
-    UpdateType[UpdateType["MAJOR"] = 0] = "MAJOR";
-    UpdateType[UpdateType["MINOR"] = 1] = "MINOR";
-    UpdateType[UpdateType["PATCH"] = 2] = "PATCH";
-})(UpdateType || (exports.UpdateType = UpdateType = {}));
+const npm_js_1 = __nccwpck_require__(1816);
+const drift_js_1 = __nccwpck_require__(7835);
 // ------------------------------------------------------------------
 // Constants & Scoring
 // ------------------------------------------------------------------
@@ -259110,7 +259270,8 @@ const CORE_INFRASTRUCTURE = new Set([
  */
 const calculatePriorityScore = (packageName, updateType) => {
     let score = updateType * 100;
-    if (CORE_INFRASTRUCTURE.has(packageName) || packageName.startsWith("@aws-sdk/")) {
+    if (CORE_INFRASTRUCTURE.has(packageName) ||
+        packageName.startsWith("@aws-sdk/")) {
         score -= 50;
     }
     return score;
@@ -259187,10 +259348,10 @@ const getUpdateType = (current, latest) => {
     const c = current.replace(/^[\^~]/, "").split(".");
     const l = latest.split(".");
     if (c[0] !== l[0])
-        return UpdateType.MAJOR;
+        return drift_js_1.UpdateType.MAJOR;
     if (c[1] !== l[1])
-        return UpdateType.MINOR;
-    return UpdateType.PATCH;
+        return drift_js_1.UpdateType.MINOR;
+    return drift_js_1.UpdateType.PATCH;
 };
 exports.getUpdateType = getUpdateType;
 
@@ -259418,38 +259579,172 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.run = void 0;
-const node_child_process_1 = __nccwpck_require__(1421);
-const fs = __importStar(__nccwpck_require__(3024));
 const core = __importStar(__nccwpck_require__(6966));
 const github = __importStar(__nccwpck_require__(9512));
-const github_js_1 = __nccwpck_require__(9294);
-const jules_js_1 = __nccwpck_require__(3054);
-const notifier_js_1 = __nccwpck_require__(6451);
-const orchestrator_js_1 = __nccwpck_require__(3029);
-const handleScanWorkflow = async (githubToken, julesApiKey, webhookUrl, workspaceRoot) => {
-    core.info(`🚀 depSync: Starting monorepo analysis...`);
-    const drifts = await (0, orchestrator_js_1.analyzeMonorepoDrift)(workspaceRoot, githubToken);
-    if (drifts.length === 0) {
-        core.info("✅ No dependency drifts detected.");
-        return;
+const chatops_workflow_js_1 = __nccwpck_require__(4418);
+const cleanup_workflow_js_1 = __nccwpck_require__(2824);
+const scan_workflow_js_1 = __nccwpck_require__(3811);
+const run = async () => {
+    try {
+        const githubToken = core.getInput("github-token", { required: true });
+        const julesApiKey = core.getInput("jules-api-key", { required: true });
+        const webhookUrl = core.getInput("webhook-url"); // Optional
+        const workspaceRoot = process.env.GITHUB_WORKSPACE || process.cwd();
+        const eventName = github.context.eventName;
+        core.info(`depSync triggered by event: ${eventName}`);
+        if (eventName === "issue_comment") {
+            await (0, chatops_workflow_js_1.handleIssueCommentWorkflow)(githubToken, julesApiKey, webhookUrl);
+        }
+        else if (eventName === "issues" &&
+            github.context.payload.action === "closed") {
+            await (0, cleanup_workflow_js_1.handleIssueClosedWorkflow)(julesApiKey, github.context.payload.issue?.body);
+        }
+        else {
+            // e.g. schedule, push, workflow_dispatch
+            await (0, scan_workflow_js_1.handleScanWorkflow)(githubToken, julesApiKey, webhookUrl, workspaceRoot);
+        }
     }
-    core.info(`🔍 Found ${drifts.length} outdated external dependencies.`);
-    const { owner, repo } = github.context.repo;
-    for (const drift of drifts) {
-        try {
-            core.info(`🤖 Analyzing ${drift.dependencyName} with Jules AI...`);
-            const julesSession = await (0, jules_js_1.createJulesSession)(julesApiKey, owner, repo, drift);
-            core.info(`📅 Opening GitHub issue for ${drift.dependencyName}...`);
-            await (0, github_js_1.reportDriftAsIssue)(githubToken, drift, julesSession);
-            await (0, notifier_js_1.sendNotification)(webhookUrl, `🚨 depSync detected drift in \`${drift.dependencyName}\`. A new issue was opened with Jules AI analysis!`);
-            core.info(`✔ Successfully processed ${drift.dependencyName}.`);
-        }
-        catch (error) {
-            const msg = error instanceof Error ? error.message : String(error);
-            core.error(`❌ Failed processing ${drift.dependencyName}: ${msg}`);
-        }
+    catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        core.setFailed(`depSync execution failed: ${message}`);
     }
 };
+exports.run = run;
+(0, exports.run)();
+
+
+/***/ }),
+
+/***/ 8584:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.gitOps = void 0;
+const node_child_process_1 = __nccwpck_require__(1421);
+const core = __importStar(__nccwpck_require__(6966));
+/**
+ * Clean wrapper for Git operations to decouple from shell execution.
+ */
+exports.gitOps = {
+    configureUser: (name = "depSync Bot", email = "bot@depsync.ai") => {
+        core.info(`🔧 Configuring Git user: ${name} <${email}>`);
+        (0, node_child_process_1.execSync)(`git config user.name "${name}"`);
+        (0, node_child_process_1.execSync)(`git config user.email "${email}"`);
+    },
+    createBranch: (branchName) => {
+        core.info(`🌿 Creating branch ${branchName}...`);
+        (0, node_child_process_1.execSync)(`git checkout -b ${branchName}`);
+    },
+    commitAll: (message) => {
+        core.info("💾 Committing changes...");
+        (0, node_child_process_1.execSync)("git add .");
+        (0, node_child_process_1.execSync)(`git commit -m "${message}"`);
+    },
+    push: (remoteUrl, branchName, force = false) => {
+        core.info(`⬆️ Pushing changes to ${branchName}...`);
+        const forceFlag = force ? " --force" : "";
+        (0, node_child_process_1.execSync)(`git push "${remoteUrl}" ${branchName}${forceFlag}`);
+    },
+};
+
+
+/***/ }),
+
+/***/ 7835:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.UpdateType = void 0;
+exports.UpdateType = {
+    MAJOR: 0,
+    MINOR: 1,
+    PATCH: 2,
+};
+
+
+/***/ }),
+
+/***/ 4418:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.handleIssueCommentWorkflow = void 0;
+const core = __importStar(__nccwpck_require__(6966));
+const github = __importStar(__nccwpck_require__(9512));
+const close_command_js_1 = __nccwpck_require__(2618);
+const fix_command_js_1 = __nccwpck_require__(3137);
 const isAuthorized = (actor, association) => {
     const authorizedAssociations = ["OWNER", "MEMBER", "COLLABORATOR"];
     if (association && authorizedAssociations.includes(association)) {
@@ -259497,82 +259792,59 @@ const handleIssueCommentWorkflow = async (githubToken, julesApiKey, webhookUrl) 
     }
     const sessionName = sessionMatch[1];
     if (isFix) {
-        await handleFixCommand(githubToken, julesApiKey, sessionName, issueNumber, commentId, webhookUrl);
+        await (0, fix_command_js_1.handleFixCommand)(githubToken, julesApiKey, sessionName, issueNumber, commentId, webhookUrl);
     }
     else if (isClose) {
-        await handleCloseCommand(githubToken, julesApiKey, sessionName, issueNumber, commentId, webhookUrl);
+        await (0, close_command_js_1.handleCloseCommand)(githubToken, julesApiKey, sessionName, issueNumber, commentId, webhookUrl);
     }
 };
-const handleFixCommand = async (githubToken, julesApiKey, sessionName, issueNumber, commentId, webhookUrl) => {
-    const octokit = github.getOctokit(githubToken);
-    const { owner, repo } = github.context.repo;
-    try {
-        await (0, github_js_1.addCommentReaction)(githubToken, commentId, "eyes");
-        await octokit.rest.issues.createComment({
-            owner,
-            repo,
-            issue_number: issueNumber,
-            body: `🚀 Jules AI is generating code fixes and preparing a Pull Request...`,
-        });
-        // 1. Get fixes from Jules
-        const fixes = await (0, jules_js_1.sendJulesMessage)(julesApiKey, sessionName, "Generate a Pull Request fixing the outlined breaking changes.");
-        // 2. Apply fixes & Git Ops
-        const branchName = `depsync/fix-issue-${issueNumber}`;
-        core.info("🔧 Configuring Git user...");
-        (0, node_child_process_1.execSync)('git config user.name "depSync Bot"');
-        (0, node_child_process_1.execSync)('git config user.email "bot@depsync.ai"');
-        core.info(`🌿 Creating branch ${branchName}...`);
-        (0, node_child_process_1.execSync)(`git checkout -b ${branchName}`);
-        for (const fix of fixes) {
-            core.info(`📝 Applying fix to ${fix.filePath}...`);
-            fs.writeFileSync(fix.filePath, fix.fileContent);
-        }
-        core.info("💾 Committing changes...");
-        (0, node_child_process_1.execSync)("git add .");
-        (0, node_child_process_1.execSync)('git commit -m "chore: automated dependency fix by depSync"');
-        core.info("⬆️ Pushing changes...");
-        const remoteUrl = `https://x-access-token:${githubToken}@github.com/${owner}/${repo}.git`;
-        (0, node_child_process_1.execSync)(`git push "${remoteUrl}" ${branchName} --force`);
-        // 3. Create PR
-        core.info("🎁 Creating Pull Request...");
-        const { data: pr } = await octokit.rest.pulls.create({
-            owner,
-            repo,
-            title: `[depSync] Fix for Issue #${issueNumber}`,
-            head: branchName,
-            base: "main",
-            body: `This PR was automatically generated by Jules AI in response to issue #${issueNumber}.\n\nCloses #${issueNumber}`,
-        });
-        await (0, notifier_js_1.sendNotification)(webhookUrl, `✅ Jules AI created PR #${pr.number} for issue #${issueNumber}.`);
+exports.handleIssueCommentWorkflow = handleIssueCommentWorkflow;
+
+
+/***/ }),
+
+/***/ 2824:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
     }
-    catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        core.error(`❌ Failed /fix flow: ${msg}`);
-        await octokit.rest.issues.createComment({
-            owner,
-            repo,
-            issue_number: issueNumber,
-            body: `❌ **Failed to generate PR**: ${msg}`,
-        });
-    }
-    finally {
-        // ALWAYS cleanup
-        core.info("🧹 Cleaning up Jules session and closing issue...");
-        await (0, jules_js_1.deleteJulesSession)(julesApiKey, sessionName).catch((e) => core.warning(`Cleanup failed: ${e.message}`));
-        await (0, github_js_1.closeIssue)(githubToken, issueNumber);
-    }
-};
-const handleCloseCommand = async (githubToken, julesApiKey, sessionName, issueNumber, commentId, webhookUrl) => {
-    try {
-        await (0, github_js_1.addCommentReaction)(githubToken, commentId, "rocket"); // Closest to 🧹 in standard reactions? Or just rocket.
-        await (0, jules_js_1.deleteJulesSession)(julesApiKey, sessionName);
-        await (0, github_js_1.closeIssue)(githubToken, issueNumber);
-        await (0, notifier_js_1.sendNotification)(webhookUrl, `🧹 Jules session for issue #${issueNumber} has been terminated.`);
-    }
-    catch (error) {
-        core.error(`❌ Failed /close flow: ${error}`);
-    }
-};
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.handleIssueClosedWorkflow = void 0;
+const core = __importStar(__nccwpck_require__(6966));
+const jules_js_1 = __nccwpck_require__(3054);
 const handleIssueClosedWorkflow = async (julesApiKey, issueBody) => {
     if (!issueBody)
         return;
@@ -259583,33 +259855,82 @@ const handleIssueClosedWorkflow = async (julesApiKey, issueBody) => {
         await (0, jules_js_1.deleteJulesSession)(julesApiKey, sessionName).catch(() => { });
     }
 };
-const run = async () => {
-    try {
-        const githubToken = core.getInput("github-token", { required: true });
-        const julesApiKey = core.getInput("jules-api-key", { required: true });
-        const webhookUrl = core.getInput("webhook-url"); // Optional
-        const workspaceRoot = process.env.GITHUB_WORKSPACE || process.cwd();
-        const eventName = github.context.eventName;
-        core.info(`depSync triggered by event: ${eventName}`);
-        if (eventName === "issue_comment") {
-            await handleIssueCommentWorkflow(githubToken, julesApiKey, webhookUrl);
-        }
-        else if (eventName === "issues" &&
-            github.context.payload.action === "closed") {
-            await handleIssueClosedWorkflow(julesApiKey, github.context.payload.issue?.body);
-        }
-        else {
-            // e.g. schedule, push, workflow_dispatch
-            await handleScanWorkflow(githubToken, julesApiKey, webhookUrl, workspaceRoot);
-        }
+exports.handleIssueClosedWorkflow = handleIssueClosedWorkflow;
+
+
+/***/ }),
+
+/***/ 3811:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
     }
-    catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error";
-        core.setFailed(`depSync execution failed: ${message}`);
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.handleScanWorkflow = void 0;
+const core = __importStar(__nccwpck_require__(6966));
+const github = __importStar(__nccwpck_require__(9512));
+const github_js_1 = __nccwpck_require__(9294);
+const jules_js_1 = __nccwpck_require__(3054);
+const notifier_js_1 = __nccwpck_require__(6451);
+const orchestrator_js_1 = __nccwpck_require__(3029);
+const handleScanWorkflow = async (githubToken, julesApiKey, webhookUrl, workspaceRoot) => {
+    core.info(`🚀 depSync: Starting monorepo analysis...`);
+    const drifts = await (0, orchestrator_js_1.analyzeMonorepoDrift)(workspaceRoot, githubToken);
+    if (drifts.length === 0) {
+        core.info("✅ No dependency drifts detected.");
+        return;
+    }
+    core.info(`🔍 Found ${drifts.length} outdated external dependencies.`);
+    const { owner, repo } = github.context.repo;
+    for (const drift of drifts) {
+        try {
+            core.info(`🤖 Analyzing ${drift.dependencyName} with Jules AI...`);
+            const julesSession = await (0, jules_js_1.createJulesSession)(julesApiKey, owner, repo, drift);
+            core.info(`📅 Opening GitHub issue for ${drift.dependencyName}...`);
+            await (0, github_js_1.reportDriftAsIssue)(githubToken, drift, julesSession);
+            await (0, notifier_js_1.sendNotification)(webhookUrl, `🚨 depSync detected drift in \`${drift.dependencyName}\`. A new issue was opened with Jules AI analysis!`);
+            core.info(`✔ Successfully processed ${drift.dependencyName}.`);
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            core.error(`❌ Failed processing ${drift.dependencyName}: ${msg}`);
+        }
     }
 };
-exports.run = run;
-(0, exports.run)();
+exports.handleScanWorkflow = handleScanWorkflow;
 
 
 /***/ }),

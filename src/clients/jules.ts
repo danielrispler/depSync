@@ -1,5 +1,5 @@
-import type { AggregatedDrift } from "../core/orchestrator/orchestrator.utils.js";
 import { buildGeminiPayload } from "../core/orchestrator/payload.js";
+import type { AggregatedDrift } from "../types/drift.js";
 
 export interface JulesSessionRequest {
 	title: string;

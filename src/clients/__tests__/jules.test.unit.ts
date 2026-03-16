@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AggregatedDrift } from "../../core/orchestrator/orchestrator.utils.js";
-import { deleteJulesSession, sendJulesMessage, createJulesSession } from "../jules.js";
+import type { AggregatedDrift } from "../../types/drift.js";
+import {
+	createJulesSession,
+	deleteJulesSession,
+	sendJulesMessage,
+} from "../jules.js";
 
 describe("createJulesSession", () => {
 	beforeEach(() => {
@@ -68,7 +72,9 @@ describe("sendJulesMessage", () => {
 	const mockSession = "sessions/123";
 
 	it("should return fixes when API returns them", async () => {
-		const mockFixes = [{ filePath: "src/index.ts", fileContent: "new content" }];
+		const mockFixes = [
+			{ filePath: "src/index.ts", fileContent: "new content" },
+		];
 		const mockFetch = vi.fn().mockResolvedValue({
 			ok: true,
 			status: 200,

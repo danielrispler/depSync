@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { GeminiPromptPayload } from "../orchestrator.utils.js";
-import {
-	buildGeminiPayload,
-	type GeminiPromptPayload as GeminiOutput,
-} from "../payload.js";
+import type { GeminiPromptPayload } from "../../../types/drift.js";
+import { buildGeminiPayload, type GeminiFinalPrompt } from "../payload.js";
 
 describe("payload generator", () => {
 	const mockDependencyName = "test-pkg";
@@ -11,7 +8,7 @@ describe("payload generator", () => {
 	it("should generate a valid payload with empty payloads array", () => {
 		const payloads: GeminiPromptPayload[] = [];
 		const resultString = buildGeminiPayload(mockDependencyName, payloads, null);
-		const result = JSON.parse(resultString) as GeminiOutput;
+		const result = JSON.parse(resultString) as GeminiFinalPrompt;
 
 		expect(result.dependencyName).toBe(mockDependencyName);
 		expect(result.usages).toEqual([]);
@@ -73,7 +70,7 @@ describe("payload generator", () => {
 			payloads,
 			releaseNotes,
 		);
-		const result = JSON.parse(resultString) as GeminiOutput;
+		const result = JSON.parse(resultString) as GeminiFinalPrompt;
 
 		expect(result.dependencyName).toBe(mockDependencyName);
 		expect(result.releaseNotes).toBe(releaseNotes);

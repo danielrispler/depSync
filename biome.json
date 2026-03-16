@@ -15,7 +15,7 @@
 	},
 	"linter": {
 		"enabled": true,
-		"includes": ["src/**/*.ts"],
+		"includes": ["src/**/*.ts", "!src/**/*.test.*.ts"],
 		"rules": {
 			"recommended": true
 		}

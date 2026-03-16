@@ -1,53 +1,8 @@
-import { getExternalDependencies } from "../../clients/npm.js";
-import type { DependencyUsage } from "../ast/ast.js";
-import type { PackageJson } from "../scanner/scanner.js";
 import { dirname } from "node:path";
 
-// ------------------------------------------------------------------
-// Context Interfaces (Payloads for Gemini)
-// ------------------------------------------------------------------
-
-export interface PackageContext {
-	/** e.g. "@mycompany/auth-service" */
-	packageName: string;
-	/** e.g. "1.2.0" */
-	version: string;
-	/** The absolute directory holding this package */
-	packagePath: string;
-	/** Dense 1-sentence domain description for near-zero token cost */
-	serviceDescription: string;
-}
-
-export interface UpdateContext {
-	dependencyName: string;
-	currentVersion: string;
-	latestVersion: string;
-}
-
-export interface GeminiPromptPayload {
-	/** Metadata and domain context about the workspace package being updated */
-	package: PackageContext;
-	/** Details about the dependency that is changing */
-	update: UpdateContext;
-	/** The AST analysis of precisely how this dependency is used in this package */
-	usages: DependencyUsage[];
-}
-
-export enum UpdateType {
-	MAJOR = 0,
-	MINOR = 1,
-	PATCH = 2,
-}
-
-export interface AggregatedDrift {
-	dependencyName: string;
-	currentVersions: Set<string>;
-	latestVersion: string;
-	payloads: GeminiPromptPayload[];
-	/** GitHub release notes for the target version, truncated to 3k chars */
-	releaseNotes: string | null;
-	priorityScore: number;
-}
+import { getExternalDependencies } from "../../clients/npm.js";
+import { type GeminiPromptPayload, UpdateType } from "../../types/drift.js";
+import type { PackageJson } from "../scanner/scanner.js";
 
 export type DependencyMap = Map<
 	string,
@@ -89,7 +44,10 @@ export const calculatePriorityScore = (
 ): number => {
 	let score = updateType * 100;
 
-	if (CORE_INFRASTRUCTURE.has(packageName) || packageName.startsWith("@aws-sdk/")) {
+	if (
+		CORE_INFRASTRUCTURE.has(packageName) ||
+		packageName.startsWith("@aws-sdk/")
+	) {
 		score -= 50;
 	}
 
@@ -178,10 +136,7 @@ export const buildPackagePayload = (
 /**
  * Simple semver-ish update type detector.
  */
-export const getUpdateType = (
-	current: string,
-	latest: string,
-): UpdateType => {
+export const getUpdateType = (current: string, latest: string): UpdateType => {
 	const c = current.replace(/^[\^~]/, "").split(".");
 	const l = latest.split(".");
 

@@ -1,10 +1,10 @@
-import type { GeminiPromptPayload as OrchestratorPayload } from "./orchestrator.utils.js";
+import type { GeminiPromptPayload } from "../../types/drift.js";
 
 /**
  * Represents the structured system instructions and context
  * provided to the Gemini model for analysis.
  */
-export interface GeminiPromptPayload {
+export interface GeminiFinalPrompt {
 	instruction: string;
 	dependencyName: string;
 	releaseNotes: string | null;
@@ -57,7 +57,7 @@ CRITICAL INSTRUCTIONS:
  */
 export const buildGeminiPayload = (
 	dependencyName: string,
-	payloads: ReadonlyArray<OrchestratorPayload>,
+	payloads: ReadonlyArray<GeminiPromptPayload>,
 	releaseNotes: string | null,
 ): string => {
 	const processedUsages: ProcessedUsage[] = payloads.flatMap((payload) =>
@@ -66,15 +66,15 @@ export const buildGeminiPayload = (
 				const enclosingFunc: ProcessedEnclosingFunction | null =
 					ctx.enclosingFunction
 						? {
-							name: ctx.enclosingFunction.name,
-							signature: ctx.enclosingFunction.signature,
-							body: ctx.enclosingFunction.body,
-							isExported: ctx.enclosingFunction.isExported,
-							localCallers: ctx.localCallers.map((caller) => ({
-								statement: caller.statement,
-								line: caller.line,
-							})),
-						}
+								name: ctx.enclosingFunction.name,
+								signature: ctx.enclosingFunction.signature,
+								body: ctx.enclosingFunction.body,
+								isExported: ctx.enclosingFunction.isExported,
+								localCallers: ctx.localCallers.map((caller) => ({
+									statement: caller.statement,
+									line: caller.line,
+								})),
+							}
 						: null;
 
 				return {
@@ -90,7 +90,7 @@ export const buildGeminiPayload = (
 		),
 	);
 
-	const geminiPayload: GeminiPromptPayload = {
+	const geminiPayload: GeminiFinalPrompt = {
 		instruction: INSTRUCTION_TEXT,
 		dependencyName,
 		releaseNotes,

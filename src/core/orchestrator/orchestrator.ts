@@ -1,15 +1,21 @@
 import { dirname } from "node:path";
 import { getReleaseNotesForDependency } from "../../clients/changelog.js";
 import { getLatestVersion, isUpdateNeeded } from "../../clients/npm.js";
+import type {
+	AggregatedDrift,
+	GeminiPromptPayload,
+} from "../../types/drift.js";
 import { createProject, extractDependencyUsages } from "../ast/ast.js";
-import { scanTypeScriptFiles, scanWorkspace } from "../scanner/scanner.js";
 import {
-	type AggregatedDrift,
+	type PackageJson,
+	scanTypeScriptFiles,
+	scanWorkspace,
+} from "../scanner/scanner.js";
+import {
 	buildDependencyMap,
 	buildPackagePayload,
-	type GeminiPromptPayload,
-	getUpdateType,
 	calculatePriorityScore,
+	getUpdateType,
 } from "./orchestrator.utils.js";
 
 /**
@@ -31,7 +37,7 @@ export const analyzeMonorepoDrift = async (
 		priorityScore: number;
 		currentVersions: Set<string>;
 		latestVersion: string;
-		usages: Array<{ path: string; pkg: any; currentVersion: string }>;
+		usages: Array<{ path: string; pkg: PackageJson; currentVersion: string }>;
 	}> = [];
 
 	// Phase 1: Rank and Filter (Local Only)
@@ -44,7 +50,9 @@ export const analyzeMonorepoDrift = async (
 
 			if (outdatedUsages.length === 0) continue;
 
-			const currentVersions = new Set(outdatedUsages.map((u) => u.currentVersion));
+			const currentVersions = new Set(
+				outdatedUsages.map((u) => u.currentVersion),
+			);
 			const firstCurrent = Array.from(currentVersions)[0];
 			const updateType = getUpdateType(firstCurrent, latestVersion);
 			const priorityScore = calculatePriorityScore(dep, updateType);

@@ -1,5 +1,5 @@
 import * as github from "@actions/github";
-import type { AggregatedDrift } from "../core/orchestrator/orchestrator.utils.js";
+import type { AggregatedDrift } from "../types/drift.js";
 import type { JulesSessionResponse } from "./jules.js";
 
 export interface GitHubDependencies {
