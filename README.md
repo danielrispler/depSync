@@ -61,25 +61,46 @@ depSync is a custom GitHub Action that goes beyond simple version checks. Using 
 Add `depSync` to your `.github/workflows/depsync.yml`:
 
 ```yaml
-name: depSync
+name: depSync AI Manager
+
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 5 * * 0'
+  workflow_dispatch:
   issue_comment:
     types: [created]
+  # 1. ADDED: Listen for manual issue closures to trigger Jules cleanup
+  issues:
+    types: [closed] 
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
 
 jobs:
-  sync:
+  run-depsync:
+    name: Run depSync Analysis
     runs-on: ubuntu-latest
+    
+    # 2. ADDED: Allow the workflow to run if the comment contains /close
+    if: >
+      github.event_name != 'issue_comment' || 
+      contains(github.event.comment.body, '/fix') || 
+      contains(github.event.comment.body, '/close') || 
+      contains(github.event.comment.body, '/dry-run')
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-      - name: depSync
-        uses: ./
+      - name: Checkout this Monorepo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Execute depSync Action
+        uses: danielrispler/depSync@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           jules-api-key: ${{ secrets.JULES_API_KEY }}
-          webhook-url: ${{ secrets.NOTIFIER_WEBHOOK }}
 ```
 
 ### Inputs
