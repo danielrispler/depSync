@@ -50,7 +50,7 @@ export const createJulesSession = async (
 			drift.releaseNotes,
 		),
 		sourceContext: {
-			source: `sources/github-${repoOwner}-${repoName}`,
+			source: `sources/github/${repoOwner}/${repoName}`,
 			githubRepoContext: {
 				startingBranch: "main",
 			},
@@ -75,8 +75,18 @@ export const createJulesSession = async (
 
 	if (!response.ok) {
 		const errorBody = await response.text();
+		const status = response.status;
+
+		if (status === 404) {
+			throw new Error(
+				`Jules API returned 404: Requested entity not found. 
+Please ensure the Jules GitHub App is installed on ${repoOwner}/${repoName} at https://jules.google/.
+API Response: ${errorBody}`,
+			);
+		}
+
 		throw new Error(
-			`Jules API request failed with status ${response.status}: ${errorBody}`,
+			`Jules API request failed with status ${status}: ${errorBody}`,
 		);
 	}
 

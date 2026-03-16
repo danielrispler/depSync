@@ -61,7 +61,7 @@ describe("createJulesSession", () => {
 		);
 
 		const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-		expect(body.sourceContext.source).toBe("sources/github-owner-repo");
+		expect(body.sourceContext.source).toBe("sources/github/owner/repo");
 		expect(body.prompt).toContain("expert migration assistant");
 		expect(body.prompt).toContain("lodash");
 	});
