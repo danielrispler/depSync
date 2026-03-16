@@ -10,19 +10,73 @@ export interface JulesSessionRequest {
 			startingBranch: string;
 		};
 	};
-	automationMode: "AUTOMATION_MODE_UNSPECIFIED" | "AUTOMATION_MODE_GENERATION";
-}
-
-export interface JulesFileFix {
-	filePath: string;
-	fileContent: string;
+	automationMode: "AUTOMATION_MODE_UNSPECIFIED" | "AUTO_CREATE_PR";
+	requirePlanApproval?: boolean;
 }
 
 export interface JulesSessionResponse {
 	name: string;
+	id: string;
 	title: string;
+	sourceContext: {
+		source: string;
+		githubRepoContext: {
+			startingBranch: string;
+		};
+	};
+	prompt: string;
+	outputs?: Array<{
+		pullRequest?: {
+			url: string;
+			title: string;
+			description: string;
+		};
+	}>;
+}
+
+export interface JulesSource {
+	name: string;
+	id: string;
+	githubRepo: {
+		owner: string;
+		repo: string;
+	};
+}
+
+export interface JulesSourcesResponse {
+	sources: JulesSource[];
+	nextPageToken?: string;
+}
+
+export interface JulesActivity {
+	name: string;
+	id: string;
 	createTime: string;
-	updateTime: string;
+	originator: "agent" | "user";
+	planGenerated?: {
+		plan: {
+			id: string;
+			steps: Array<{
+				id: string;
+				title: string;
+				index?: number;
+			}>;
+		};
+	};
+	planApproved?: {
+		planId: string;
+	};
+	progressUpdated?: {
+		title: string;
+		description?: string;
+	};
+	sessionCompleted?: Record<string, unknown>;
+	artifacts?: Array<Record<string, unknown>>;
+}
+
+export interface JulesActivitiesResponse {
+	activities: JulesActivity[];
+	nextPageToken?: string;
 }
 
 export interface JulesDependencies {
@@ -33,10 +87,51 @@ const defaultDependencies: JulesDependencies = {
 	fetch: globalThis.fetch.bind(globalThis),
 };
 
+const BASE_URL = "https://jules.googleapis.com/v1alpha";
+
+const getHeaders = (apiKey: string) => ({
+	"Content-Type": "application/json",
+	"X-Goog-Api-Key": apiKey,
+});
+
+const handleResponse = async <T>(response: Response): Promise<T> => {
+	if (response.status === 429) {
+		throw new Error(
+			"Jules API rate limit exceeded (429). Please retry in one hour.",
+		);
+	}
+
+	if (!response.ok) {
+		const errorBody = await response.text();
+		throw new Error(
+			`Jules API request failed with status ${response.status}: ${errorBody}`,
+		);
+	}
+
+	if (response.status === 204) {
+		return {} as T;
+	}
+
+	const text = await response.text();
+	return (text ? JSON.parse(text) : {}) as T;
+};
+
+/**
+ * Lists available sources for the Jules API.
+ */
+export const listJulesSources = async (
+	apiKey: string,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesSourcesResponse> => {
+	const url = `${BASE_URL}/sources`;
+	const response = await deps.fetch(url, {
+		headers: getHeaders(apiKey),
+	});
+	return handleResponse<JulesSourcesResponse>(response);
+};
+
 /**
  * Creates an autonomous session in the Jules API for dependency analysis.
- * Accepts a full AggregatedDrift to provide Jules with release notes,
- * service descriptions, and AST context in a single structured prompt.
  */
 export const createJulesSession = async (
 	apiKey: string,
@@ -45,7 +140,7 @@ export const createJulesSession = async (
 	drift: AggregatedDrift,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<JulesSessionResponse> => {
-	const url = "https://jules.googleapis.com/v1alpha/sessions";
+	const url = `${BASE_URL}/sessions`;
 
 	const body: JulesSessionRequest = {
 		title: `depSync: Update ${drift.dependencyName}`,
@@ -60,83 +155,83 @@ export const createJulesSession = async (
 				startingBranch: "main",
 			},
 		},
-		automationMode: "AUTOMATION_MODE_UNSPECIFIED",
+		automationMode: "AUTO_CREATE_PR",
 	};
 
 	const response = await deps.fetch(url, {
 		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"x-goog-api-key": apiKey,
-		},
+		headers: getHeaders(apiKey),
 		body: JSON.stringify(body),
 	});
 
-	if (response.status === 429) {
-		throw new Error(
-			"Jules API rate limit exceeded (429). Please retry in one hour.",
-		);
-	}
-
-	if (!response.ok) {
-		const errorBody = await response.text();
-		const status = response.status;
-
-		if (status === 404) {
-			throw new Error(
-				`Jules API returned 404: Requested entity not found. 
-Please ensure the Jules GitHub App is installed on ${repoOwner}/${repoName} at https://jules.google/.
-API Response: ${errorBody}`,
-			);
-		}
-
-		throw new Error(
-			`Jules API request failed with status ${status}: ${errorBody}`,
-		);
-	}
-
-	return (await response.json()) as JulesSessionResponse;
+	return handleResponse<JulesSessionResponse>(response);
 };
 
 /**
- * Sends a message to an existing Jules session, typically to trigger
- * AUTOMATION_MODE_GENERATION (e.g., when the user types /fix).
+ * Gets the details of an existing Jules session.
+ */
+export const getJulesSession = async (
+	apiKey: string,
+	sessionName: string,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesSessionResponse> => {
+	const url = `${BASE_URL}/${sessionName}`;
+	const response = await deps.fetch(url, {
+		headers: getHeaders(apiKey),
+	});
+	return handleResponse<JulesSessionResponse>(response);
+};
+
+/**
+ * Approves the latest plan in a Jules session.
+ */
+export const approveJulesPlan = async (
+	apiKey: string,
+	sessionName: string,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<void> => {
+	const url = `${BASE_URL}/${sessionName}:approvePlan`;
+	const response = await deps.fetch(url, {
+		method: "POST",
+		headers: getHeaders(apiKey),
+	});
+	await handleResponse<void>(response);
+};
+
+/**
+ * Sends a message to an existing Jules session.
  */
 export const sendJulesMessage = async (
 	apiKey: string,
 	sessionName: string,
-	message: string,
+	prompt: string,
 	deps: JulesDependencies = defaultDependencies,
-): Promise<JulesFileFix[]> => {
-	// The Jules API expects the session name to be part of the URL path along with the custom action :sendMessage
-	const url = `https://jules.googleapis.com/v1alpha/${sessionName}:sendMessage`;
+): Promise<void> => {
+	const url = `${BASE_URL}/${sessionName}:sendMessage`;
 
 	const response = await deps.fetch(url, {
 		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			"x-goog-api-key": apiKey,
-		},
-		body: JSON.stringify({ message }),
+		headers: getHeaders(apiKey),
+		body: JSON.stringify({ prompt }),
 	});
 
-	if (response.status === 429) {
-		throw new Error(
-			"Jules API rate limit exceeded (429). Please retry in one hour.",
-		);
-	}
+	await handleResponse<void>(response);
+};
 
-	if (!response.ok) {
-		const errorBody = await response.text();
-		throw new Error(
-			`Jules sendMessage failed with status ${response.status}: ${errorBody}`,
-		);
-	}
-
-	const data = await response.json();
-	// Assume the API returns { fixes: JulesFileFix[] } or the array directly.
-	// Based on the instruction: "Assume the API returns a JSON array of { filePath: string, fileContent: string }"
-	return (data.fixes || data) as JulesFileFix[];
+/**
+ * Lists activities in a Jules session.
+ */
+export const listJulesActivities = async (
+	apiKey: string,
+	sessionName: string,
+	pageSize = 30,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesActivitiesResponse> => {
+	const url = `${BASE_URL}/${sessionName}/activities?pageSize=${pageSize}`;
+	const response = await deps.fetch(url, {
+		headers: getHeaders(apiKey),
+	});
+	return handleResponse<JulesActivitiesResponse>(response);
 };
 
 /**
@@ -147,30 +242,18 @@ export const deleteJulesSession = async (
 	sessionName: string,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<void> => {
-	const url = `https://jules.googleapis.com/v1alpha/${sessionName}`;
+	const url = `${BASE_URL}/${sessionName}`;
 
 	const response = await deps.fetch(url, {
 		method: "DELETE",
 		headers: {
-			"x-goog-api-key": apiKey,
+			"X-Goog-Api-Key": apiKey,
 		},
 	});
 
 	if (response.status === 404) {
-		// Already deleted or never existed, return gracefully
 		return;
 	}
 
-	if (response.status === 429) {
-		throw new Error(
-			"Jules API rate limit exceeded (429). Please retry in one hour.",
-		);
-	}
-
-	if (!response.ok) {
-		const errorBody = await response.text();
-		throw new Error(
-			`Jules deleteSession failed with status ${response.status}: ${errorBody}`,
-		);
-	}
+	await handleResponse<void>(response);
 };

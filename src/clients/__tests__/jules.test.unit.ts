@@ -1,129 +1,221 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AggregatedDrift } from "../../types/drift.js";
 import {
+	approveJulesPlan,
 	createJulesSession,
 	deleteJulesSession,
+	getJulesSession,
+	listJulesActivities,
+	listJulesSources,
 	sendJulesMessage,
 } from "../jules.js";
 
-describe("createJulesSession", () => {
+describe("Jules API Client", () => {
+	const mockApiKey = "test-api-key";
+	const mockSession = "sessions/123";
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
-	const mockApiKey = "test-api-key";
-	const mockOwner = "owner";
-	const mockRepo = "repo";
-	const mockDrift: AggregatedDrift = {
-		dependencyName: "lodash",
-		currentVersions: new Set(["1.0.0"]),
-		latestVersion: "2.0.0",
-		releaseNotes: "Critical security fix for potential XSS vulnerability.",
-		priorityScore: 50,
-		payloads: [
-			{
-				package: {
-					packageName: "test-pkg",
-					version: "1.0.0",
-					packagePath: "/test",
-					serviceDescription: "Handles user auth",
+	describe("createJulesSession", () => {
+		const mockOwner = "owner";
+		const mockRepo = "repo";
+		const mockDrift: AggregatedDrift = {
+			dependencyName: "lodash",
+			currentVersions: new Set(["1.0.0"]),
+			latestVersion: "2.0.0",
+			releaseNotes: "Critical security fix for potential XSS vulnerability.",
+			priorityScore: 50,
+			payloads: [
+				{
+					package: {
+						packageName: "test-pkg",
+						version: "1.0.0",
+						packagePath: "/test",
+						serviceDescription: "Handles user auth",
+					},
+					update: {
+						dependencyName: "lodash",
+						currentVersion: "1.0.0",
+						latestVersion: "2.0.0",
+					},
+					usages: [],
 				},
-				update: {
-					dependencyName: "lodash",
-					currentVersion: "1.0.0",
-					latestVersion: "2.0.0",
-				},
-				usages: [],
-			},
-		],
-	};
+			],
+		};
 
-	it("should call the Jules API with correct headers and body", async () => {
-		const mockFetch = vi.fn().mockResolvedValue({
-			ok: true,
-			status: 200,
-			json: vi.fn().mockResolvedValue({ name: "sessions/123" }),
+		it("should call the Jules API with correct headers and body", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue(JSON.stringify({ name: mockSession })),
+			});
+
+			const result = await createJulesSession(
+				mockApiKey,
+				mockOwner,
+				mockRepo,
+				mockDrift,
+				{ fetch: mockFetch as any },
+			);
+
+			expect(result.name).toBe(mockSession);
+			expect(mockFetch).toHaveBeenCalledWith(
+				"https://jules.googleapis.com/v1alpha/sessions",
+				expect.objectContaining({
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"X-Goog-Api-Key": mockApiKey,
+					},
+				}),
+			);
 		});
-
-		const result = await createJulesSession(
-			mockApiKey,
-			mockOwner,
-			mockRepo,
-			mockDrift,
-			{ fetch: mockFetch as any },
-		);
-
-		expect(result.name).toBe("sessions/123");
-		expect(mockFetch).toHaveBeenCalledWith(
-			"https://jules.googleapis.com/v1alpha/sessions",
-			expect.objectContaining({
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					"x-goog-api-key": mockApiKey,
-				},
-			}),
-		);
-	});
-});
-
-describe("sendJulesMessage", () => {
-	const mockApiKey = "test-api-key";
-	const mockSession = "sessions/123";
-
-	it("should return fixes when API returns them", async () => {
-		const mockFixes = [
-			{ filePath: "src/index.ts", fileContent: "new content" },
-		];
-		const mockFetch = vi.fn().mockResolvedValue({
-			ok: true,
-			status: 200,
-			json: vi.fn().mockResolvedValue({ fixes: mockFixes }),
-		});
-
-		const result = await sendJulesMessage(mockApiKey, mockSession, "fix it", {
-			fetch: mockFetch as any,
-		});
-
-		expect(result).toEqual(mockFixes);
-		expect(mockFetch).toHaveBeenCalledWith(
-			expect.stringContaining("sessions/123:sendMessage"),
-			expect.objectContaining({ method: "POST" }),
-		);
-	});
-});
-
-describe("deleteJulesSession", () => {
-	const mockApiKey = "test-api-key";
-	const mockSession = "sessions/123";
-
-	it("should call DELETE on the session URL", async () => {
-		const mockFetch = vi.fn().mockResolvedValue({
-			ok: true,
-			status: 200,
-		});
-
-		await deleteJulesSession(mockApiKey, mockSession, {
-			fetch: mockFetch as any,
-		});
-
-		expect(mockFetch).toHaveBeenCalledWith(
-			"https://jules.googleapis.com/v1alpha/sessions/123",
-			expect.objectContaining({
-				method: "DELETE",
-				headers: { "x-goog-api-key": mockApiKey },
-			}),
-		);
 	});
 
-	it("should handle 404 gracefully", async () => {
-		const mockFetch = vi.fn().mockResolvedValue({
-			ok: false,
-			status: 404,
+	describe("sendJulesMessage", () => {
+		it("should call the sendMessage endpoint with prompt", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue("{}"),
+			});
+
+			await sendJulesMessage(mockApiKey, mockSession, "fix it", {
+				fetch: mockFetch as any,
+			});
+
+			expect(mockFetch).toHaveBeenCalledWith(
+				expect.stringContaining("sessions/123:sendMessage"),
+				expect.objectContaining({
+					method: "POST",
+					body: JSON.stringify({ prompt: "fix it" }),
+					headers: expect.objectContaining({
+						"X-Goog-Api-Key": mockApiKey,
+					}),
+				}),
+			);
+		});
+	});
+
+	describe("approveJulesPlan", () => {
+		it("should call the approvePlan endpoint", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue("{}"),
+			});
+
+			await approveJulesPlan(mockApiKey, mockSession, {
+				fetch: mockFetch as any,
+			});
+
+			expect(mockFetch).toHaveBeenCalledWith(
+				expect.stringContaining("sessions/123:approvePlan"),
+				expect.objectContaining({
+					method: "POST",
+				}),
+			);
+		});
+	});
+
+	describe("getJulesSession", () => {
+		it("should call the session URL with GET", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue(JSON.stringify({ name: mockSession })),
+			});
+
+			const result = await getJulesSession(mockApiKey, mockSession, {
+				fetch: mockFetch as any,
+			});
+
+			expect(result.name).toBe(mockSession);
+			expect(mockFetch).toHaveBeenCalledWith(
+				"https://jules.googleapis.com/v1alpha/sessions/123",
+				expect.objectContaining({
+					headers: expect.objectContaining({
+						"X-Goog-Api-Key": mockApiKey,
+					}),
+				}),
+			);
+		});
+	});
+
+	describe("listJulesActivities", () => {
+		it("should call the activities URL with GET", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue(JSON.stringify({ activities: [] })),
+			});
+
+			const result = await listJulesActivities(mockApiKey, mockSession, 30, {
+				fetch: mockFetch as any,
+			});
+
+			expect(result.activities).toEqual([]);
+			expect(mockFetch).toHaveBeenCalledWith(
+				expect.stringContaining("sessions/123/activities?pageSize=30"),
+				expect.anything(),
+			);
+		});
+	});
+
+	describe("listJulesSources", () => {
+		it("should call the sources URL with GET", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue(JSON.stringify({ sources: [] })),
+			});
+
+			const result = await listJulesSources(mockApiKey, {
+				fetch: mockFetch as any,
+			});
+
+			expect(result.sources).toEqual([]);
+			expect(mockFetch).toHaveBeenCalledWith(
+				"https://jules.googleapis.com/v1alpha/sources",
+				expect.anything(),
+			);
+		});
+	});
+
+	describe("deleteJulesSession", () => {
+		it("should call DELETE on the session URL", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue("{}"),
+			});
+
+			await deleteJulesSession(mockApiKey, mockSession, {
+				fetch: mockFetch as any,
+			});
+
+			expect(mockFetch).toHaveBeenCalledWith(
+				"https://jules.googleapis.com/v1alpha/sessions/123",
+				expect.objectContaining({
+					method: "DELETE",
+					headers: { "X-Goog-Api-Key": mockApiKey },
+				}),
+			);
 		});
 
-		await expect(
-			deleteJulesSession(mockApiKey, mockSession, { fetch: mockFetch as any }),
-		).resolves.not.toThrow();
+		it("should handle 404 gracefully", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: false,
+				status: 404,
+			});
+
+			await expect(
+				deleteJulesSession(mockApiKey, mockSession, {
+					fetch: mockFetch as any,
+				}),
+			).resolves.not.toThrow();
+		});
 	});
 });
