@@ -1,0 +1,34 @@
+name: depSync Weekly Run
+
+on:
+  schedule:
+    - cron: '0 5 * * 0'
+  workflow_dispatch:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  depsync:
+    name: Run depSync Analysis
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name != 'issue_comment' || 
+      contains(github.event.comment.body, '/fix') || 
+      contains(github.event.comment.body, '/dry-run')
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run depSync Action
+        uses: ./
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          jules-api-key: ${{ secrets.JULES_API_KEY }}

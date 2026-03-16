@@ -1,4 +1,4 @@
-require('./sourcemap-register.js');/******/ (() => { // webpackBootstrap
+/******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
 /***/ 4568:
@@ -258164,6 +258164,139 @@ function wrappy (fn, cb) {
 
 /***/ }),
 
+/***/ 971:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getReleaseNotesForDependency = exports.fetchReleaseNotes = exports.resolveGitHubRepo = void 0;
+const github = __importStar(__nccwpck_require__(9512));
+const MAX_RELEASE_NOTES_CHARS = 3000;
+const defaultDependencies = {
+    fetch: globalThis.fetch.bind(globalThis),
+    getOctokit: github.getOctokit,
+};
+// ------------------------------------------------------------------
+// Internal Helpers
+// ------------------------------------------------------------------
+/**
+ * Resolves the GitHub owner/repo from the npm registry metadata.
+ * The `repository` field can be either `{ type, url }` or a plain string.
+ *
+ * Common URL formats:
+ *   - "https://github.com/owner/repo.git"
+ *   - "git+https://github.com/owner/repo.git"
+ *   - "git://github.com/owner/repo.git"
+ *   - "github:owner/repo"
+ */
+const resolveGitHubRepo = async (packageName, deps = defaultDependencies) => {
+    const url = `https://registry.npmjs.org/${packageName}`;
+    const response = await deps.fetch(url, {
+        headers: { Accept: "application/json" },
+    });
+    if (!response.ok)
+        return null;
+    const data = (await response.json());
+    const repoField = data.repository;
+    if (!repoField)
+        return null;
+    const rawUrl = typeof repoField === "string" ? repoField : (repoField.url ?? "");
+    // Match "github.com/owner/repo" from any URL variant
+    const match = rawUrl.match(/github\.com[/:]([^/]+)\/([^/.#]+)/);
+    if (!match?.[1] || !match[2])
+        return null;
+    return { owner: match[1], repo: match[2] };
+};
+exports.resolveGitHubRepo = resolveGitHubRepo;
+/**
+ * Fetches the release body for a specific version tag.
+ * Tries `v${version}` first (most common convention), then `${version}`.
+ */
+const fetchReleaseNotes = async (token, owner, repo, version, deps = defaultDependencies) => {
+    const octokit = deps.getOctokit(token);
+    const tags = [`v${version}`, version];
+    for (const tag of tags) {
+        try {
+            const { data } = await octokit.rest.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag,
+            });
+            if (data.body)
+                return data.body;
+        }
+        catch {
+            // Tag not found — try next convention
+        }
+    }
+    return null;
+};
+exports.fetchReleaseNotes = fetchReleaseNotes;
+// ------------------------------------------------------------------
+// Public API
+// ------------------------------------------------------------------
+/**
+ * Orchestrator-facing function that resolves release notes for a dependency.
+ * Entirely fail-safe: any error anywhere returns null.
+ * Truncates output to MAX_RELEASE_NOTES_CHARS to protect LLM token budgets.
+ */
+const getReleaseNotesForDependency = async (token, packageName, version, deps = defaultDependencies) => {
+    try {
+        const repoInfo = await (0, exports.resolveGitHubRepo)(packageName, deps);
+        if (!repoInfo)
+            return null;
+        const notes = await (0, exports.fetchReleaseNotes)(token, repoInfo.owner, repoInfo.repo, version, deps);
+        if (!notes)
+            return null;
+        if (notes.length > MAX_RELEASE_NOTES_CHARS) {
+            return `${notes.slice(0, MAX_RELEASE_NOTES_CHARS)}\n\n...[RELEASE NOTES TRUNCATED BY DEPSYNC]`;
+        }
+        return notes;
+    }
+    catch {
+        // Entire pipeline is fail-safe — never crash the Action for release notes
+        return null;
+    }
+};
+exports.getReleaseNotesForDependency = getReleaseNotesForDependency;
+
+
+/***/ }),
+
 /***/ 9294:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -258245,21 +258378,27 @@ const reportDriftAsIssue = async (token, drift, julesSession, deps = defaultDepe
 exports.reportDriftAsIssue = reportDriftAsIssue;
 /**
  * Formats the issue body with high-density information:
- * Affected packages, Jules' session link, and the /fix call-to-action.
+ * Release notes, affected packages with descriptions, Jules session, and ChatOps CTA.
  */
 const formatIssueBody = (drift, julesSession) => {
-    const packageTable = Array.from(drift.payloads)
+    const packageTable = drift.payloads
         .map((p) => {
-        return `| ${p.package.packageName} | \`${p.update.currentVersion}\` | \`${p.update.latestVersion}\` | [${p.usages.length} usages] |`;
+        const desc = p.package.serviceDescription || "_No description_";
+        return `| ${p.package.packageName} | ${desc} | \`${p.update.currentVersion}\` | \`${p.update.latestVersion}\` | ${p.usages.length} usages |`;
     })
         .join("\n");
+    const releaseNotesSection = drift.releaseNotes
+        ? `### 📋 Release Notes (\`${drift.latestVersion}\`)\n\n<details>\n<summary>Click to expand</summary>\n\n${drift.releaseNotes}\n\n</details>`
+        : `### 📋 Release Notes\n\n_No release notes found for \`${drift.latestVersion}\`._`;
     return `## 📦 Dependency Update Required: ${drift.dependencyName}
 
-Jules has analyzed your monorepo and identified that ${drift.dependencyName} is out of sync across multiple services.
+depSync has analyzed your monorepo and identified that **${drift.dependencyName}** is out of sync across multiple services.
+
+${releaseNotesSection}
 
 ### 📊 Affected Packages
-| Package | Current | Latest | AST Context |
-| :--- | :--- | :--- | :--- |
+| Package | Description | Current | Latest | AST Context |
+| :--- | :--- | :--- | :--- | :--- |
 ${packageTable}
 
 ### 🤖 Jules Analysis Session
@@ -258271,7 +258410,6 @@ View the full autonomous analysis and proposed plan:
 ### 🛠️ ChatOps Commands
 Reply to this issue with one of the following commands:
 - \`/fix\`: Trigger Jules to automatically generate a Pull Request with the required code fixes.
-- \`/dry-run\`: See the proposed changes without creating a branch.
 
 > This issue was generated by **depSync** — Context-Aware AI Dependency Manager.
 <!-- jules-session-id: ${julesSession.name} -->`;
@@ -258293,14 +258431,14 @@ const defaultDependencies = {
 };
 /**
  * Creates an autonomous session in the Jules API for dependency analysis.
- * Strictly uses native fetch and follows the v1alpha REST specification.
+ * Accepts a full AggregatedDrift to provide Jules with release notes,
+ * service descriptions, and AST context in a single structured prompt.
  */
-const createJulesSession = async (apiKey, repoOwner, repoName, dependencyName, payload, deps = defaultDependencies) => {
+const createJulesSession = async (apiKey, repoOwner, repoName, drift, deps = defaultDependencies) => {
     const url = "https://jules.googleapis.com/v1alpha/sessions";
     const body = {
-        title: `depSync: Update ${dependencyName}`,
-        // We use the same flattened, token-efficient payload structured for LLMs
-        prompt: `Analyze this AST context for breaking changes and provide code fixes. \n\n ${(0, payload_js_1.buildGeminiPayload)(dependencyName, payload.usages)}`,
+        title: `depSync: Update ${drift.dependencyName}`,
+        prompt: (0, payload_js_1.buildGeminiPayload)(drift.dependencyName, drift.payloads, drift.releaseNotes),
         sourceContext: {
             source: `sources/github-${repoOwner}-${repoName}`,
             githubRepoContext: {
@@ -258776,6 +258914,7 @@ exports.extractDependencyUsages = extractDependencyUsages;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.analyzeMonorepoDrift = void 0;
 const node_path_1 = __nccwpck_require__(6760);
+const changelog_js_1 = __nccwpck_require__(971);
 const npm_js_1 = __nccwpck_require__(1816);
 const ast_js_1 = __nccwpck_require__(4111);
 const scanner_js_1 = __nccwpck_require__(8451);
@@ -258787,17 +258926,17 @@ const orchestrator_utils_js_1 = __nccwpck_require__(1890);
  * Main Orchestrator Pipeline
  * 1. Scans workspace for packages.
  * 2. Inverts dependency mappings to group by DependencyName.
- * 3. (Drafted) Fetches latest versions & compares drift.
- * 4. (Drafted) Discovers TS files and performs AST extraction.
+ * 3. Fetches latest versions & compares drift.
+ * 4. Fetches release notes from GitHub for drifted dependencies.
+ * 5. Discovers TS files and performs AST extraction.
  */
-const analyzeMonorepoDrift = async (workspaceRoot) => {
+const analyzeMonorepoDrift = async (workspaceRoot, githubToken) => {
     // Step 1: Discover all package.json files
     const packages = await (0, scanner_js_1.scanWorkspace)(workspaceRoot);
     // Step 2: Aggregate by external dependency
     const dependencyMap = (0, orchestrator_utils_js_1.buildDependencyMap)(packages);
     const drifts = [];
-    // Optional optimization: If we had a batch endpoint, we could fetch all at once.
-    // For now, we fetch latest versions sequentially to avoid spamming the registry
+    // Fetch latest versions sequentially to avoid spamming the registry
     // if there are hundreds of dependencies.
     for (const [dep, usages] of dependencyMap.entries()) {
         try {
@@ -258805,6 +258944,8 @@ const analyzeMonorepoDrift = async (workspaceRoot) => {
             const outdatedUsages = usages.filter((u) => (0, npm_js_1.isUpdateNeeded)(u.currentVersion, latestVersion));
             if (outdatedUsages.length === 0)
                 continue;
+            // Fetch release notes for the target version (fail-safe)
+            const releaseNotes = await (0, changelog_js_1.getReleaseNotesForDependency)(githubToken, dep, latestVersion);
             // We have a drifted dependency!
             const currentVersions = new Set(outdatedUsages.map((u) => u.currentVersion));
             const payloads = [];
@@ -258840,13 +258981,16 @@ const analyzeMonorepoDrift = async (workspaceRoot) => {
                     currentVersions,
                     latestVersion,
                     payloads,
+                    releaseNotes,
                 });
             }
         }
         catch (error) {
             // If npm fetch fails for a single package (e.g., private registry without auth),
             // log safely and continue with the rest of the monorepo instead of crashing entirely.
-            console.error(`Failed to analyze drift for dependency ${dep}:`, error);
+            const msg = error instanceof Error ? error.message : String(error);
+            // Use core.debug to avoid leaking internal details in action logs
+            console.error(`Failed to analyze drift for dependency ${dep}: ${msg}`);
         }
     }
     return drifts;
@@ -258862,10 +259006,31 @@ exports.analyzeMonorepoDrift = analyzeMonorepoDrift;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.buildPackagePayload = exports.buildDependencyMap = void 0;
+exports.buildPackagePayload = exports.buildDependencyMap = exports.extractServiceDescription = void 0;
 const node_path_1 = __nccwpck_require__(6760);
 const npm_js_1 = __nccwpck_require__(1816);
-const scanner_js_1 = __nccwpck_require__(8451);
+// ------------------------------------------------------------------
+// Internal Context Helpers
+// ------------------------------------------------------------------
+/**
+ * Extracts a lightweight service description from package.json.
+ * Priority: `description` → `depSync.aiContext` → empty string.
+ * This yields a dense, 1-sentence explanation for near-zero token cost.
+ */
+const extractServiceDescription = (pkg) => {
+    if (pkg.description && typeof pkg.description === "string") {
+        return pkg.description;
+    }
+    const depSyncConfig = pkg.depSync;
+    if (depSyncConfig?.aiContext && typeof depSyncConfig.aiContext === "string") {
+        return depSyncConfig.aiContext;
+    }
+    return "";
+};
+exports.extractServiceDescription = extractServiceDescription;
+// ------------------------------------------------------------------
+// Public Builders
+// ------------------------------------------------------------------
 /**
  * Inverts the dependency mapping from Package -> Dependencies to Dependency -> Packages.
  */
@@ -258900,7 +259065,7 @@ const buildPackagePayload = (packageJsonPath, pkg, dependencyName, currentVersio
             packageName: pkg.name || "unknown",
             version: pkg.version || "0.0.0",
             packagePath: (0, node_path_1.dirname)(packageJsonPath),
-            readmeContent: (0, scanner_js_1.tryReadPackageReadme)(packageJsonPath),
+            serviceDescription: (0, exports.extractServiceDescription)(pkg),
         },
         update: {
             dependencyName,
@@ -258922,20 +259087,20 @@ exports.buildPackagePayload = buildPackagePayload;
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.buildGeminiPayload = void 0;
-const INSTRUCTION_TEXT = `You are an expert TypeScript architect analyzing a dependency update.
-You are given specific, isolated Usages of the dependency across a monorepo.
+const INSTRUCTION_TEXT = `You are an expert migration assistant. The target dependency has breaking changes outlined in the [Release Notes]. The user's local service ([Service Description]) uses it as shown in the [AST Context]. Generate the exact code required to safely migrate the user's code to the new version.
 
 CRITICAL INSTRUCTIONS:
-1. Analyze the 'usages' array to understand exactly how the dependency is used.
-2. If an enclosing function is marked as 'isExported: true', changing its signature or return type is a high-risk BREAKING CHANGE to the rest of the monorepo.
-3. Use the 'localCallers' array to understand the immediate localized data flow, as it shows where the enclosing function is called within the same file.
-4. Respond with a technical analysis and specific, targeted code suggestions for any required fixes.`;
+1. Analyze the 'releaseNotes' to understand what changed in the dependency.
+2. For each usage, check the 'serviceName' and 'serviceDescription' to understand the service's domain.
+3. If an enclosing function is marked as 'isExported: true', changing its signature or return type is a high-risk BREAKING CHANGE to the rest of the monorepo.
+4. Use the 'localCallers' array to understand the immediate localized data flow.
+5. Respond with a technical analysis and specific, targeted code suggestions for any required fixes.`;
 /**
- * Pure function that transforms raw AST `DependencyUsage` extractions
- * into a highly structured, token-efficient `GeminiPromptPayload`.
+ * Pure function that transforms raw orchestrator payloads (with service context)
+ * into a highly structured, token-efficient JSON string for the LLM.
  */
-const buildGeminiPayload = (dependencyName, usages) => {
-    const processedUsages = usages.flatMap((usage) => usage.usages.map((ctx) => {
+const buildGeminiPayload = (dependencyName, payloads, releaseNotes) => {
+    const processedUsages = payloads.flatMap((payload) => payload.usages.flatMap((usage) => usage.usages.map((ctx) => {
         const enclosingFunc = ctx.enclosingFunction
             ? {
                 name: ctx.enclosingFunction.name,
@@ -258949,21 +259114,24 @@ const buildGeminiPayload = (dependencyName, usages) => {
             }
             : null;
         return {
+            serviceName: payload.package.packageName,
+            serviceDescription: payload.package.serviceDescription,
             file: usage.file,
             importStatement: usage.importStatement,
             callingStatement: ctx.statement,
             line: ctx.line,
             enclosingFunction: enclosingFunc,
         };
-    }));
-    const payload = {
+    })));
+    const geminiPayload = {
         instruction: INSTRUCTION_TEXT,
         dependencyName,
+        releaseNotes,
         usages: processedUsages,
     };
     // We use standard JSON.stringify here instead of formatted space,
     // as this is for LLM API transport, minimizing string size/tokens.
-    return JSON.stringify(payload);
+    return JSON.stringify(geminiPayload);
 };
 exports.buildGeminiPayload = buildGeminiPayload;
 
@@ -259009,7 +259177,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.tryReadPackageReadme = exports.scanTypeScriptFiles = exports.scanWorkspace = void 0;
+exports.scanTypeScriptFiles = exports.scanWorkspace = void 0;
 const promises_1 = __nccwpck_require__(1455);
 const node_path_1 = __nccwpck_require__(6760);
 const core = __importStar(__nccwpck_require__(6966));
@@ -259087,32 +259255,6 @@ const scanTypeScriptFiles = async (packageRoot, deps = defaultDependencies) => {
     return globber.glob();
 };
 exports.scanTypeScriptFiles = scanTypeScriptFiles;
-const node_fs_1 = __nccwpck_require__(3024);
-const node_path_2 = __nccwpck_require__(6760);
-/**
- * Safely attempts to read the README.md file from a package directory.
- * Fails gracefully and returns null if the file doesn't exist or is unreadable.
- * Truncates massive READMEs to prevent LLM token explosion (default: 10,000 chars).
- */
-const tryReadPackageReadme = (packageJsonPath, maxChars = 10000) => {
-    try {
-        const pkgDir = (0, node_path_2.dirname)(packageJsonPath);
-        const readmePath = (0, node_path_2.join)(pkgDir, "README.md");
-        const stat = (0, node_fs_1.statSync)(readmePath);
-        if (!stat.isFile())
-            return null;
-        const content = (0, node_fs_1.readFileSync)(readmePath, "utf-8");
-        if (content.length > maxChars) {
-            return `${content.slice(0, maxChars)}\n\n...[README TRUNCATED BY DEPSYNC]`;
-        }
-        return content;
-    }
-    catch {
-        // README is optional; safe to ignore missing files
-        return null;
-    }
-};
-exports.tryReadPackageReadme = tryReadPackageReadme;
 
 
 /***/ }),
@@ -259165,7 +259307,7 @@ const notifier_js_1 = __nccwpck_require__(6451);
 const orchestrator_js_1 = __nccwpck_require__(3029);
 const handleScanWorkflow = async (githubToken, julesApiKey, webhookUrl, workspaceRoot) => {
     core.info(`🚀 depSync: Starting monorepo analysis...`);
-    const drifts = await (0, orchestrator_js_1.analyzeMonorepoDrift)(workspaceRoot);
+    const drifts = await (0, orchestrator_js_1.analyzeMonorepoDrift)(workspaceRoot, githubToken);
     if (drifts.length === 0) {
         core.info("✅ No dependency drifts detected.");
         return;
@@ -259175,7 +259317,7 @@ const handleScanWorkflow = async (githubToken, julesApiKey, webhookUrl, workspac
     for (const drift of drifts) {
         try {
             core.info(`🤖 Analyzing ${drift.dependencyName} with Jules AI...`);
-            const julesSession = await (0, jules_js_1.createJulesSession)(julesApiKey, owner, repo, drift.dependencyName, drift.payloads[0]);
+            const julesSession = await (0, jules_js_1.createJulesSession)(julesApiKey, owner, repo, drift);
             core.info(`📅 Opening GitHub issue for ${drift.dependencyName}...`);
             await (0, github_js_1.reportDriftAsIssue)(githubToken, drift, julesSession);
             await (0, notifier_js_1.sendNotification)(webhookUrl, `🚨 depSync detected drift in \`${drift.dependencyName}\`. A new issue was opened with Jules AI analysis!`);
@@ -265661,4 +265803,3 @@ exports.isDynamicPattern = isDynamicPattern;
 /******/ 	
 /******/ })()
 ;
-//# sourceMappingURL=index.js.map
