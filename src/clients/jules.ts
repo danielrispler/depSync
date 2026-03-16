@@ -13,6 +13,11 @@ export interface JulesSessionRequest {
 	automationMode: "AUTOMATION_MODE_UNSPECIFIED" | "AUTOMATION_MODE_GENERATION";
 }
 
+export interface JulesFileFix {
+	filePath: string;
+	fileContent: string;
+}
+
 export interface JulesSessionResponse {
 	name: string;
 	title: string;
@@ -102,7 +107,7 @@ export const sendJulesMessage = async (
 	sessionName: string,
 	message: string,
 	deps: JulesDependencies = defaultDependencies,
-): Promise<void> => {
+): Promise<JulesFileFix[]> => {
 	// The Jules API expects the session name to be part of the URL path along with the custom action :sendMessage
 	const url = `https://jules.googleapis.com/v1alpha/${sessionName}:sendMessage`;
 
@@ -112,7 +117,6 @@ export const sendJulesMessage = async (
 			"Content-Type": "application/json",
 			"x-goog-api-key": apiKey,
 		},
-		// The API expects { "message": string } or similar based on standard Chat patterns.
 		body: JSON.stringify({ message }),
 	});
 
@@ -126,6 +130,47 @@ export const sendJulesMessage = async (
 		const errorBody = await response.text();
 		throw new Error(
 			`Jules sendMessage failed with status ${response.status}: ${errorBody}`,
+		);
+	}
+
+	const data = await response.json();
+	// Assume the API returns { fixes: JulesFileFix[] } or the array directly.
+	// Based on the instruction: "Assume the API returns a JSON array of { filePath: string, fileContent: string }"
+	return (data.fixes || data) as JulesFileFix[];
+};
+
+/**
+ * Terminates a Jules session to free cloud resources.
+ */
+export const deleteJulesSession = async (
+	apiKey: string,
+	sessionName: string,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<void> => {
+	const url = `https://jules.googleapis.com/v1alpha/${sessionName}`;
+
+	const response = await deps.fetch(url, {
+		method: "DELETE",
+		headers: {
+			"x-goog-api-key": apiKey,
+		},
+	});
+
+	if (response.status === 404) {
+		// Already deleted or never existed, return gracefully
+		return;
+	}
+
+	if (response.status === 429) {
+		throw new Error(
+			"Jules API rate limit exceeded (429). Please retry in one hour.",
+		);
+	}
+
+	if (!response.ok) {
+		const errorBody = await response.text();
+		throw new Error(
+			`Jules deleteSession failed with status ${response.status}: ${errorBody}`,
 		);
 	}
 };

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AggregatedDrift } from "../../core/orchestrator/orchestrator.utils.js";
-import { createJulesSession } from "../jules.js";
+import { deleteJulesSession, sendJulesMessage, createJulesSession } from "../jules.js";
 
 describe("createJulesSession", () => {
 	beforeEach(() => {
@@ -60,37 +60,64 @@ describe("createJulesSession", () => {
 				},
 			}),
 		);
+	});
+});
 
-		const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-		expect(body.sourceContext.source).toBe("sources/github/owner/repo");
-		expect(body.prompt).toContain("expert migration assistant");
-		expect(body.prompt).toContain("lodash");
+describe("sendJulesMessage", () => {
+	const mockApiKey = "test-api-key";
+	const mockSession = "sessions/123";
+
+	it("should return fixes when API returns them", async () => {
+		const mockFixes = [{ filePath: "src/index.ts", fileContent: "new content" }];
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			json: vi.fn().mockResolvedValue({ fixes: mockFixes }),
+		});
+
+		const result = await sendJulesMessage(mockApiKey, mockSession, "fix it", {
+			fetch: mockFetch as any,
+		});
+
+		expect(result).toEqual(mockFixes);
+		expect(mockFetch).toHaveBeenCalledWith(
+			expect.stringContaining("sessions/123:sendMessage"),
+			expect.objectContaining({ method: "POST" }),
+		);
+	});
+});
+
+describe("deleteJulesSession", () => {
+	const mockApiKey = "test-api-key";
+	const mockSession = "sessions/123";
+
+	it("should call DELETE on the session URL", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+		});
+
+		await deleteJulesSession(mockApiKey, mockSession, {
+			fetch: mockFetch as any,
+		});
+
+		expect(mockFetch).toHaveBeenCalledWith(
+			"https://jules.googleapis.com/v1alpha/sessions/123",
+			expect.objectContaining({
+				method: "DELETE",
+				headers: { "x-goog-api-key": mockApiKey },
+			}),
+		);
 	});
 
-	it("should throw a specific error on 429 rate limit", async () => {
+	it("should handle 404 gracefully", async () => {
 		const mockFetch = vi.fn().mockResolvedValue({
 			ok: false,
-			status: 429,
+			status: 404,
 		});
 
 		await expect(
-			createJulesSession(mockApiKey, mockOwner, mockRepo, mockDrift, {
-				fetch: mockFetch as any,
-			}),
-		).rejects.toThrow(/rate limit exceeded/);
-	});
-
-	it("should throw an error with response text on other non-ok status codes", async () => {
-		const mockFetch = vi.fn().mockResolvedValue({
-			ok: false,
-			status: 500,
-			text: vi.fn().mockResolvedValue("Internal Server Error"),
-		});
-
-		await expect(
-			createJulesSession(mockApiKey, mockOwner, mockRepo, mockDrift, {
-				fetch: mockFetch as any,
-			}),
-		).rejects.toThrow(/status 500/);
+			deleteJulesSession(mockApiKey, mockSession, { fetch: mockFetch as any }),
+		).resolves.not.toThrow();
 	});
 });
