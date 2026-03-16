@@ -16,7 +16,7 @@ export type DependencyMap = Map<
 /**
  * High-impact infrastructure packages that deserve priority weighting.
  */
-const CORE_INFRASTRUCTURE = new Set([
+const CORE_INFRASTRUCTURE: Set<string> = new Set([
 	"typescript",
 	"react",
 	"next",

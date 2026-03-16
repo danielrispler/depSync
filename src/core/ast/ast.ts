@@ -49,7 +49,7 @@ export interface DependencyUsage {
 // re-allocating arrays on every invocation.
 // ------------------------------------------------------------------
 
-const STATEMENT_KINDS = [
+const STATEMENT_KINDS: SyntaxKind[] = [
 	SyntaxKind.ExpressionStatement,
 	SyntaxKind.VariableStatement,
 	SyntaxKind.FunctionDeclaration,
@@ -66,7 +66,7 @@ const STATEMENT_KINDS = [
 	SyntaxKind.ExportAssignment,
 ];
 
-const FUNCTION_KINDS = [
+const FUNCTION_KINDS: SyntaxKind[] = [
 	SyntaxKind.FunctionDeclaration,
 	SyntaxKind.FunctionExpression,
 	SyntaxKind.ArrowFunction,

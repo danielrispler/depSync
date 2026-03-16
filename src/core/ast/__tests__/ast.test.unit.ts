@@ -101,7 +101,7 @@ class HttpClient extends BaseClient {
 			"t5.ts",
 			`import * as utils from "target-pkg";
 
-function processAll(items: string[]) {
+const processAll = (items: string[]) => {
 	if (!utils.isReady()) return;
 	items.forEach(item => utils.process(item));
 }`,
@@ -176,7 +176,7 @@ setup({ debug: true });`,
 			"t8.ts",
 			`import { foo, bar } from "target-pkg";
 
-function run() {
+const run = () => {
 	const result = foo(bar());
 }`,
 		);
@@ -196,9 +196,8 @@ function run() {
 		const sf = project.createSourceFile(
 			"t9.ts",
 			`import {x} from "daniel";
-const a = b(2)
-
-function b (num: number){ return x(num + 4); }`,
+const b = (num: number) => { return x(num + 4); }
+const a = b(2)`,
 		);
 
 		const result = extractDependencyUsages(sf, "daniel");

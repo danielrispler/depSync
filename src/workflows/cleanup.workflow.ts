@@ -4,7 +4,7 @@ import { deleteJulesSession } from "../clients/jules.js";
 export const handleIssueClosedWorkflow = async (
 	julesApiKey: string,
 	issueBody: string | undefined,
-) => {
+): Promise<void> => {
 	if (!issueBody) return;
 	const sessionMatch = issueBody.match(
 		/<!-- jules-session-id: (sessions\/[^ ]+) -->/,

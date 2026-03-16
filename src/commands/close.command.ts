@@ -10,7 +10,7 @@ export const handleCloseCommand = async (
 	issueNumber: number,
 	commentId: number,
 	webhookUrl: string | undefined,
-) => {
+): Promise<void> => {
 	try {
 		await addCommentReaction(githubToken, commentId, "rocket");
 		await deleteJulesSession(julesApiKey, sessionName);

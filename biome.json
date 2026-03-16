@@ -11,13 +11,21 @@
 	"formatter": {
 		"enabled": true,
 		"indentStyle": "tab",
-		"includes": ["src/**/*.ts"]
+		"includes": [
+			"src/**/*.ts"
+		]
 	},
 	"linter": {
 		"enabled": true,
-		"includes": ["src/**/*.ts", "!src/**/*.test.*.ts"],
+		"includes": [
+			"src/**/*.ts",
+			"!src/**/*.test.*.ts"
+		],
 		"rules": {
-			"recommended": true
+			"recommended": true,
+			"nursery": {
+				"useExplicitType": "error"
+			}
 		}
 	},
 	"javascript": {

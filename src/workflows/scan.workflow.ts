@@ -10,7 +10,7 @@ export const handleScanWorkflow = async (
 	julesApiKey: string,
 	webhookUrl: string | undefined,
 	workspaceRoot: string,
-) => {
+): Promise<void> => {
 	core.info(`🚀 depSync: Starting monorepo analysis...`);
 	const drifts = await analyzeMonorepoDrift(workspaceRoot, githubToken);
 

@@ -94,7 +94,7 @@ const defaultDependencies: JulesDependencies = {
 
 const BASE_URL = "https://jules.googleapis.com/v1alpha";
 
-const getHeaders = (apiKey: string) => ({
+const getHeaders = (apiKey: string): Record<string, string> => ({
 	"Content-Type": "application/json",
 	"X-Goog-Api-Key": apiKey,
 });
@@ -261,7 +261,7 @@ export const sendJulesMessage = async (
 export const listJulesActivities = async (
 	apiKey: string,
 	sessionName: string,
-	pageSize = 30,
+	pageSize: number = 30,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<JulesActivitiesResponse> => {
 	const url = `${BASE_URL}/${sessionName}/activities?pageSize=${pageSize}`;

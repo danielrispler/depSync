@@ -12,7 +12,7 @@ vi.mock("../clients/github.js");
 vi.mock("node:child_process");
 vi.mock("node:fs");
 
-const setMockContext = (eventName: string, payload: any) => {
+const setMockContext = (eventName: string, payload: unknown): void => {
 	Object.defineProperty(github, "context", {
 		value: {
 			eventName,

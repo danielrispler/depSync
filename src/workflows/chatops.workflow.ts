@@ -3,7 +3,10 @@ import * as github from "@actions/github";
 import { handleCloseCommand } from "../commands/close.command.js";
 import { handleFixCommand } from "../commands/fix.command.js";
 
-const isAuthorized = (actor: string, association: string | undefined) => {
+const isAuthorized = (
+	actor: string,
+	association: string | undefined,
+): boolean => {
 	const authorizedAssociations = ["OWNER", "MEMBER", "COLLABORATOR"];
 	if (association && authorizedAssociations.includes(association)) {
 		return true;
@@ -18,7 +21,7 @@ export const handleIssueCommentWorkflow = async (
 	githubToken: string,
 	julesApiKey: string,
 	webhookUrl: string | undefined,
-) => {
+): Promise<void> => {
 	const payload = github.context.payload;
 	const commentBody = payload.comment?.body || "";
 	const issueBody = payload.issue?.body || "";
