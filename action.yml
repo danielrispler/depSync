@@ -9,8 +9,14 @@ inputs:
   jules-api-key:
     description: 'Jules REST API Key for autonomous AI dependency analysis'
     required: true
-  webhook-url:
-    description: 'Webhook URL for push notifications (Discord/Slack)'
+  notification-webhook-url:
+    description: 'Webhook URL for batched depSync notifications'
+    required: false
+  notification-webhook-secret:
+    description: 'Optional shared secret used to sign notification webhook payloads'
+    required: false
+  core-frameworks:
+    description: 'Optional comma-separated list of framework/package names to prioritize'
     required: false
 
 runs:

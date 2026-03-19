@@ -22,43 +22,84 @@ describe("reportDriftAsIssue", () => {
 		currentVersions: new Set(["17.0.0"]),
 		latestVersion: "18.0.0",
 		releaseNotes: "## Breaking Changes\n- New JSX Transform",
+		driftWeight: 340,
+		updateType: 0,
+		affectedPackages: [
+			{
+				packageName: "web",
+				packageJsonPath: "/workspace/apps/web/package.json",
+			},
+		],
+		affectedSourceFiles: [
+			{
+				packageJsonPath: "/workspace/apps/web/package.json",
+				filePath: "/workspace/apps/web/src/index.tsx",
+			},
+		],
+		usageCount: 3,
 		payloads: [
 			{
 				package: {
 					packageName: "web",
 					version: "1.0.0",
+					packagePath: "/workspace/apps/web",
 					serviceDescription: "Main web application",
 				},
-				update: { currentVersion: "17.0.0", latestVersion: "18.0.0" },
-				usages: [{}, {}],
+				update: {
+					dependencyName: "react",
+					currentVersion: "17.0.0",
+					latestVersion: "18.0.0",
+				},
+				usages: [
+					{
+						file: "/workspace/apps/web/src/index.tsx",
+						importStatement: "import React from 'react';",
+						usages: [],
+					},
+				],
 			},
 		],
 	} as any;
 
-	const mockJulesSession = {
-		name: "sessions/123",
-		title: "depSync: Update react",
-	} as any;
+	const mockAnalysis = {
+		riskLevel: "high",
+		issueSummary: "react affects 1 package across 1 file with high risk.",
+		executionMetadata: {
+			generatedAt: "2026-03-19T12:00:00.000Z",
+			affectedFileCount: 1,
+			affectedPackageCount: 1,
+			julesActivityCount: 2,
+		},
+		markdown: "### Summary\nreact is widespread.\n\n### Risk\nHigh.",
+	} as const;
 
 	it("should create a new issue if none exists", async () => {
 		const mockOctokit = {
 			rest: {
 				issues: {
 					listForRepo: vi.fn().mockResolvedValue({ data: [] }),
-					create: vi.fn().mockResolvedValue({ data: { number: 1 } }),
+					create: vi
+						.fn()
+						.mockResolvedValue({ data: { number: 1, html_url: "issue-url" } }),
 					update: vi.fn(),
 				},
 			},
 		};
 
-		await reportDriftAsIssue(mockToken, mockDrift, mockJulesSession, {
-			getOctokit: () => mockOctokit as any,
-		});
+		const result = await reportDriftAsIssue(
+			mockToken,
+			mockDrift,
+			mockAnalysis,
+			{
+				getOctokit: () => mockOctokit as any,
+			},
+		);
 
+		expect(result).toEqual({ number: 1, url: "issue-url" });
 		expect(mockOctokit.rest.issues.create).toHaveBeenCalledWith(
 			expect.objectContaining({
 				title: "[depSync] Dependency Update: react",
-				body: expect.stringMatching(/<!-- jules-session-id: sessions\/123 -->/),
+				body: expect.stringMatching(/<!-- depsync-context:/),
 			}),
 		);
 		expect(mockOctokit.rest.issues.update).not.toHaveBeenCalled();
@@ -77,12 +118,14 @@ describe("reportDriftAsIssue", () => {
 						],
 					}),
 					create: vi.fn(),
-					update: vi.fn().mockResolvedValue({ data: {} }),
+					update: vi
+						.fn()
+						.mockResolvedValue({ data: { number: 42, html_url: "issue-url" } }),
 				},
 			},
 		};
 
-		await reportDriftAsIssue(mockToken, mockDrift, mockJulesSession, {
+		await reportDriftAsIssue(mockToken, mockDrift, mockAnalysis, {
 			getOctokit: () => mockOctokit as any,
 		});
 
@@ -95,43 +138,27 @@ describe("reportDriftAsIssue", () => {
 		expect(mockOctokit.rest.issues.create).not.toHaveBeenCalled();
 	});
 
-	it("should include release notes in the issue body", async () => {
+	it("should keep the hidden payload compact and exclude raw release notes", async () => {
 		const mockOctokit = {
 			rest: {
 				issues: {
 					listForRepo: vi.fn().mockResolvedValue({ data: [] }),
-					create: vi.fn().mockResolvedValue({ data: { number: 1 } }),
+					create: vi
+						.fn()
+						.mockResolvedValue({ data: { number: 1, html_url: "issue-url" } }),
 					update: vi.fn(),
 				},
 			},
 		};
 
-		await reportDriftAsIssue(mockToken, mockDrift, mockJulesSession, {
+		await reportDriftAsIssue(mockToken, mockDrift, mockAnalysis, {
 			getOctokit: () => mockOctokit as any,
 		});
 
-		const body = mockOctokit.rest.issues.create.mock.calls[0][0].body;
-		expect(body).toContain("Release Notes");
-		expect(body).toContain("Breaking Changes");
-	});
-
-	it("should include service description in the packages table", async () => {
-		const mockOctokit = {
-			rest: {
-				issues: {
-					listForRepo: vi.fn().mockResolvedValue({ data: [] }),
-					create: vi.fn().mockResolvedValue({ data: { number: 1 } }),
-					update: vi.fn(),
-				},
-			},
-		};
-
-		await reportDriftAsIssue(mockToken, mockDrift, mockJulesSession, {
-			getOctokit: () => mockOctokit as any,
-		});
-
-		const body = mockOctokit.rest.issues.create.mock.calls[0][0].body;
+		const body = mockOctokit.rest.issues.create.mock.calls[0][0].body as string;
 		expect(body).toContain("Main web application");
-		expect(body).toContain("Description");
+		expect(body).not.toContain("New JSX Transform");
+		expect(body).not.toContain("import React from 'react';");
+		expect(body.length).toBeLessThan(10_000);
 	});
 });

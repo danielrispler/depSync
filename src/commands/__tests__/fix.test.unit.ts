@@ -1,8 +1,12 @@
 import * as fs from "node:fs";
 import * as core from "@actions/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { closeIssue } from "../../clients/github.js";
-import { deleteJulesSession, sendJulesMessage } from "../../clients/jules.js";
+import {
+	createJulesFixSession,
+	deleteJulesSession,
+	sendJulesMessage,
+} from "../../clients/jules.js";
+import { rebuildDriftFromIssueContext } from "../../core/orchestrator/orchestrator.js";
 import { gitOps } from "../../infrastructure/git.js";
 import { handleFixCommand } from "../fix.command.js";
 
@@ -25,16 +29,27 @@ vi.mock("@actions/github", () => ({
 vi.mock("node:fs");
 vi.mock("../../clients/github.js", () => ({
 	addCommentReaction: vi.fn().mockResolvedValue({}),
-	closeIssue: vi.fn().mockResolvedValue({}),
 }));
 vi.mock("../../clients/jules.js", () => ({
+	createJulesFixSession: vi
+		.fn()
+		.mockResolvedValue({ name: "sessions/fix-123" }),
 	deleteJulesSession: vi.fn().mockResolvedValue({}),
 	sendJulesMessage: vi.fn().mockResolvedValue([]),
-	getJulesSession: vi.fn().mockResolvedValue({}),
-	listJulesActivities: vi.fn().mockResolvedValue({ activities: [] }),
 }));
-vi.mock("../../clients/notifier.js", () => ({
-	sendNotification: vi.fn().mockResolvedValue({}),
+vi.mock("../../core/orchestrator/orchestrator.js", () => ({
+	rebuildDriftFromIssueContext: vi.fn().mockResolvedValue({
+		dependencyName: "react",
+		currentVersions: new Set(["17.0.0"]),
+		latestVersion: "18.0.0",
+		releaseNotes: "notes",
+		driftWeight: 340,
+		updateType: 0,
+		affectedPackages: [],
+		affectedSourceFiles: [],
+		usageCount: 1,
+		payloads: [],
+	}),
 }));
 vi.mock("../../infrastructure/git.js", () => ({
 	gitOps: {
@@ -48,15 +63,17 @@ vi.mock("../../infrastructure/git.js", () => ({
 describe("handleFixCommand", () => {
 	const mockGithubToken = "token";
 	const mockJulesApiKey = "key";
-	const mockSessionName = "sessions/123";
+	const mockIssueBody =
+		'<!-- depsync-context: {"schemaVersion":1,"dependencyName":"react","currentVersions":["17.0.0"],"latestVersion":"18.0.0","affectedPackages":[{"packageName":"web","packageJsonPath":"/workspace/apps/web/package.json"}],"affectedSourceFiles":[{"packageJsonPath":"/workspace/apps/web/package.json","filePath":"/workspace/apps/web/src/index.tsx"}],"riskLevel":"high","issueSummary":"summary","executionMetadata":{"generatedAt":"2026-03-19T12:00:00.000Z","affectedFileCount":1,"affectedPackageCount":1}} -->';
 	const mockIssueNumber = 1;
 	const mockCommentId = 100;
+	const coreFrameworks = new Set(["react"]);
 
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it("should apply fixes, create PR, and close issue on success", async () => {
+	it("should apply fixes, create a PR, and clean up the new session on success", async () => {
 		vi.mocked(sendJulesMessage).mockResolvedValue([
 			{ filePath: "src/app.ts", fileContent: "fixed" },
 		]);
@@ -64,62 +81,57 @@ describe("handleFixCommand", () => {
 		await handleFixCommand(
 			mockGithubToken,
 			mockJulesApiKey,
-			mockSessionName,
+			mockIssueBody,
 			mockIssueNumber,
 			mockCommentId,
-			undefined,
+			coreFrameworks,
 		);
 
+		expect(rebuildDriftFromIssueContext).toHaveBeenCalled();
+		expect(createJulesFixSession).toHaveBeenCalled();
 		expect(fs.writeFileSync).toHaveBeenCalledWith("src/app.ts", "fixed");
 		expect(gitOps.push).toHaveBeenCalled();
-		expect(closeIssue).toHaveBeenCalledWith(mockGithubToken, mockIssueNumber);
 		expect(deleteJulesSession).toHaveBeenCalledWith(
 			mockJulesApiKey,
-			mockSessionName,
+			"sessions/fix-123",
 		);
 	});
 
-	it("should NOT close issue on failure but still cleanup session", async () => {
+	it("should keep the issue open on failure but still clean up the new session", async () => {
 		vi.mocked(sendJulesMessage).mockRejectedValue(new Error("Jules failed"));
 
 		await handleFixCommand(
 			mockGithubToken,
 			mockJulesApiKey,
-			mockSessionName,
+			mockIssueBody,
 			mockIssueNumber,
 			mockCommentId,
-			undefined,
+			coreFrameworks,
 		);
 
-		expect(closeIssue).not.toHaveBeenCalled();
 		expect(deleteJulesSession).toHaveBeenCalledWith(
 			mockJulesApiKey,
-			mockSessionName,
+			"sessions/fix-123",
 		);
 		expect(core.error).toHaveBeenCalledWith(
 			expect.stringContaining("Failed /fix flow: Jules failed"),
 		);
 	});
 
-	it("should fail if no fixes are returned and keep issue open", async () => {
-		vi.mocked(sendJulesMessage).mockResolvedValue([]);
-
+	it("should report malformed issue context and avoid session creation", async () => {
 		await handleFixCommand(
 			mockGithubToken,
 			mockJulesApiKey,
-			mockSessionName,
+			"no context here",
 			mockIssueNumber,
 			mockCommentId,
-			undefined,
+			coreFrameworks,
 		);
 
-		expect(closeIssue).not.toHaveBeenCalled();
-		expect(deleteJulesSession).toHaveBeenCalledWith(
-			mockJulesApiKey,
-			mockSessionName,
-		);
+		expect(createJulesFixSession).not.toHaveBeenCalled();
+		expect(deleteJulesSession).not.toHaveBeenCalled();
 		expect(core.error).toHaveBeenCalledWith(
-			expect.stringContaining("Jules AI did not return any file fixes"),
+			expect.stringContaining("Failed /fix flow"),
 		);
 	});
 });

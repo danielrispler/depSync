@@ -1,14 +1,24 @@
 import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { addCommentReaction, closeIssue } from "../clients/github.js";
+import {
+	addCommentReaction,
+	closeIssue,
+	getIssueBody,
+} from "../clients/github.js";
 import { deleteJulesSession } from "../clients/jules.js";
 import { run } from "../index.js";
 
 vi.mock("@actions/core");
 vi.mock("@actions/github");
 vi.mock("../clients/jules.js");
-vi.mock("../clients/github.js");
+vi.mock("../clients/github.js", () => ({
+	addCommentReaction: vi.fn().mockResolvedValue(undefined),
+	closeIssue: vi.fn().mockResolvedValue(undefined),
+	getIssueBody: vi
+		.fn()
+		.mockResolvedValue("<!-- jules-session-id: sessions/123 -->"),
+}));
 vi.mock("node:child_process");
 vi.mock("node:fs");
 
@@ -29,7 +39,6 @@ describe("ChatOps Logic in index.ts", () => {
 		vi.clearAllMocks();
 		process.env.GITHUB_WORKSPACE = "/test/workspace";
 
-		// Default mock implementation for inputs
 		vi.mocked(core.getInput).mockImplementation((name) => {
 			if (name === "github-token") return "fake-token";
 			if (name === "jules-api-key") return "fake-key";
@@ -51,7 +60,7 @@ describe("ChatOps Logic in index.ts", () => {
 	it("should block unauthorized users for /fix command", async () => {
 		setMockContext("issue_comment", {
 			comment: { body: "/fix", id: 1, author_association: "NONE" },
-			issue: { number: 123, body: "<!-- jules-session-id: sessions/123 -->" },
+			issue: { number: 123 },
 		});
 
 		const mockOctokit = {
@@ -74,11 +83,12 @@ describe("ChatOps Logic in index.ts", () => {
 	it("should process /close command for authorized users", async () => {
 		setMockContext("issue_comment", {
 			comment: { body: "/close", id: 1, author_association: "OWNER" },
-			issue: { number: 123, body: "<!-- jules-session-id: sessions/123 -->" },
+			issue: { number: 123 },
 		});
 
 		await run();
 
+		expect(getIssueBody).toHaveBeenCalledWith(expect.any(String), 123);
 		expect(addCommentReaction).toHaveBeenCalledWith(
 			expect.any(String),
 			1,

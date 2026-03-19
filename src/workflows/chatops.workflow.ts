@@ -1,7 +1,9 @@
 import * as core from "@actions/core";
 import * as github from "@actions/github";
+import { getIssueBody } from "../clients/github.js";
 import { handleCloseCommand } from "../commands/close.command.js";
 import { handleFixCommand } from "../commands/fix.command.js";
+import { extractLegacyJulesSessionId } from "../core/orchestrator/issue-context.js";
 
 const isAuthorized = (
 	actor: string,
@@ -20,11 +22,10 @@ const isAuthorized = (
 export const handleIssueCommentWorkflow = async (
 	githubToken: string,
 	julesApiKey: string,
-	webhookUrl: string | undefined,
+	coreFrameworks: ReadonlySet<string>,
 ): Promise<void> => {
 	const payload = github.context.payload;
 	const commentBody = payload.comment?.body || "";
-	const issueBody = payload.issue?.body || "";
 	const issueNumber = payload.issue?.number;
 	const commentId = payload.comment?.id;
 	const actor = github.context.actor;
@@ -43,7 +44,6 @@ export const handleIssueCommentWorkflow = async (
 		return;
 	}
 
-	// 1. Authorization Guard
 	if (!isAuthorized(actor, association)) {
 		const octokit = github.getOctokit(githubToken);
 		const { owner, repo } = github.context.repo;
@@ -51,7 +51,7 @@ export const handleIssueCommentWorkflow = async (
 			owner,
 			repo,
 			issue_number: issueNumber,
-			body: `🚫 **Access Denied**: @${actor}, you must have \`write\` or \`admin\` permissions to trigger Jules AI via depSync.`,
+			body: `🚫 **Access Denied**: @${actor}, you must have \`write\` or \`admin\` permissions to trigger depSync automation.`,
 		});
 		return;
 	}
@@ -60,33 +60,25 @@ export const handleIssueCommentWorkflow = async (
 		`🛠️ Detected ${isFix ? "/fix" : "/close"} command from @${actor} on issue #${issueNumber}`,
 	);
 
-	// 2. Stateless Session Recovery
-	const sessionMatch = issueBody.match(
-		/<!-- jules-session-id: (sessions\/[^ ]+) -->/,
-	);
-	if (!sessionMatch || !sessionMatch[1]) {
-		core.error("❌ Could not recover Jules session ID.");
-		return;
-	}
-	const sessionName = sessionMatch[1];
+	const issueBody = await getIssueBody(githubToken, issueNumber);
 
 	if (isFix) {
 		await handleFixCommand(
 			githubToken,
 			julesApiKey,
-			sessionName,
+			issueBody,
 			issueNumber,
 			commentId,
-			webhookUrl,
+			coreFrameworks,
 		);
-	} else if (isClose) {
-		await handleCloseCommand(
-			githubToken,
-			julesApiKey,
-			sessionName,
-			issueNumber,
-			commentId,
-			webhookUrl,
-		);
+		return;
 	}
+
+	await handleCloseCommand(
+		githubToken,
+		julesApiKey,
+		extractLegacyJulesSessionId(issueBody) ?? undefined,
+		issueNumber,
+		commentId,
+	);
 };

@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AggregatedDrift } from "../../types/drift.js";
 import {
 	approveJulesPlan,
-	createJulesSession,
+	createJulesAnalysisSession,
+	createJulesFixSession,
 	deleteJulesSession,
 	getJulesSession,
 	listJulesActivities,
 	listJulesSources,
 	sendJulesMessage,
+	summarizeJulesSession,
 } from "../jules.js";
 
 describe("Jules API Client", () => {
@@ -18,7 +20,7 @@ describe("Jules API Client", () => {
 		vi.clearAllMocks();
 	});
 
-	describe("createJulesSession", () => {
+	describe("createJulesAnalysisSession", () => {
 		const mockOwner = "owner";
 		const mockRepo = "repo";
 		const mockDrift: AggregatedDrift = {
@@ -26,7 +28,11 @@ describe("Jules API Client", () => {
 			currentVersions: new Set(["1.0.0"]),
 			latestVersion: "2.0.0",
 			releaseNotes: "Critical security fix for potential XSS vulnerability.",
-			priorityScore: 50,
+			driftWeight: 340,
+			updateType: 0,
+			affectedPackages: [],
+			affectedSourceFiles: [],
+			usageCount: 0,
 			payloads: [
 				{
 					package: {
@@ -52,7 +58,7 @@ describe("Jules API Client", () => {
 				text: vi.fn().mockResolvedValue(JSON.stringify({ name: mockSession })),
 			});
 
-			const result = await createJulesSession(
+			const result = await createJulesAnalysisSession(
 				mockApiKey,
 				mockOwner,
 				mockRepo,
@@ -69,6 +75,40 @@ describe("Jules API Client", () => {
 						"Content-Type": "application/json",
 						"X-Goog-Api-Key": mockApiKey,
 					},
+				}),
+			);
+		});
+	});
+
+	describe("createJulesFixSession", () => {
+		it("should create a fix-oriented session", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue(JSON.stringify({ name: mockSession })),
+			});
+
+			const drift = {
+				dependencyName: "react",
+				currentVersions: new Set(["18.0.0"]),
+				latestVersion: "19.0.0",
+				releaseNotes: null,
+				driftWeight: 340,
+				updateType: 0,
+				affectedPackages: [],
+				affectedSourceFiles: [],
+				usageCount: 1,
+				payloads: [],
+			} as AggregatedDrift;
+
+			await createJulesFixSession(mockApiKey, "owner", "repo", drift, {
+				fetch: mockFetch as any,
+			});
+
+			expect(mockFetch).toHaveBeenCalledWith(
+				"https://jules.googleapis.com/v1alpha/sessions",
+				expect.objectContaining({
+					method: "POST",
 				}),
 			);
 		});
@@ -194,6 +234,42 @@ describe("Jules API Client", () => {
 				expect.stringContaining("sessions/123/activities?pageSize=30"),
 				expect.anything(),
 			);
+		});
+	});
+
+	describe("summarizeJulesSession", () => {
+		it("should collect progress and plan titles from activities", async () => {
+			const mockFetch = vi.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue(
+					JSON.stringify({
+						activities: [
+							{
+								progressUpdated: {
+									title: "Scanning footprint",
+									description: "Found risky imports",
+								},
+								planGenerated: {
+									plan: {
+										id: "plan-1",
+										steps: [{ id: "step-1", title: "Update adapters" }],
+									},
+								},
+							},
+						],
+					}),
+				),
+			});
+
+			const summary = await summarizeJulesSession(mockApiKey, mockSession, {
+				fetch: mockFetch as any,
+			});
+
+			expect(summary.activityCount).toBe(1);
+			expect(summary.signals).toContain("Scanning footprint");
+			expect(summary.signals).toContain("Found risky imports");
+			expect(summary.signals).toContain("Update adapters");
 		});
 	});
 

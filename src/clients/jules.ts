@@ -1,4 +1,7 @@
-import { buildGeminiPayload } from "../core/orchestrator/payload.js";
+import {
+	buildAnalysisPayload,
+	buildFixPayload,
+} from "../core/orchestrator/payload.js";
 import type { AggregatedDrift } from "../types/drift.js";
 
 export interface JulesSessionRequest {
@@ -84,6 +87,11 @@ export interface JulesFix {
 	fileContent: string;
 }
 
+export interface JulesSessionSummary {
+	activityCount: number;
+	signals: string[];
+}
+
 export interface JulesDependencies {
 	fetch: typeof fetch;
 }
@@ -121,6 +129,20 @@ const handleResponse = async <T>(response: Response): Promise<T> => {
 	return (text ? JSON.parse(text) : {}) as T;
 };
 
+const createSession = async (
+	apiKey: string,
+	request: JulesSessionRequest,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesSessionResponse> => {
+	const response = await deps.fetch(`${BASE_URL}/sessions`, {
+		method: "POST",
+		headers: getHeaders(apiKey),
+		body: JSON.stringify(request),
+	});
+
+	return handleResponse<JulesSessionResponse>(response);
+};
+
 /**
  * Lists available sources for the Jules API.
  */
@@ -128,49 +150,68 @@ export const listJulesSources = async (
 	apiKey: string,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<JulesSourcesResponse> => {
-	const url = `${BASE_URL}/sources`;
-	const response = await deps.fetch(url, {
+	const response = await deps.fetch(`${BASE_URL}/sources`, {
 		headers: getHeaders(apiKey),
 	});
 	return handleResponse<JulesSourcesResponse>(response);
 };
 
-/**
- * Creates an autonomous session in the Jules API for dependency analysis.
- */
-export const createJulesSession = async (
+export const createJulesAnalysisSession = async (
 	apiKey: string,
 	repoOwner: string,
 	repoName: string,
 	drift: AggregatedDrift,
 	deps: JulesDependencies = defaultDependencies,
-): Promise<JulesSessionResponse> => {
-	const url = `${BASE_URL}/sessions`;
-
-	const body: JulesSessionRequest = {
-		title: `depSync: Update ${drift.dependencyName}`,
-		prompt: buildGeminiPayload(
-			drift.dependencyName,
-			drift.payloads,
-			drift.releaseNotes,
-		),
-		sourceContext: {
-			source: `sources/github/${repoOwner}/${repoName}`,
-			githubRepoContext: {
-				startingBranch: "main",
+): Promise<JulesSessionResponse> =>
+	createSession(
+		apiKey,
+		{
+			title: `depSync: Analyze ${drift.dependencyName}`,
+			prompt: buildAnalysisPayload(
+				drift.dependencyName,
+				drift.payloads,
+				drift.releaseNotes,
+			),
+			sourceContext: {
+				source: `sources/github/${repoOwner}/${repoName}`,
+				githubRepoContext: {
+					startingBranch: "main",
+				},
 			},
+			automationMode: "AUTOMATION_MODE_UNSPECIFIED",
 		},
-		automationMode: "AUTO_CREATE_PR",
-	};
+		deps,
+	);
 
-	const response = await deps.fetch(url, {
-		method: "POST",
-		headers: getHeaders(apiKey),
-		body: JSON.stringify(body),
-	});
+export const createJulesSession: typeof createJulesAnalysisSession =
+	createJulesAnalysisSession;
 
-	return handleResponse<JulesSessionResponse>(response);
-};
+export const createJulesFixSession = async (
+	apiKey: string,
+	repoOwner: string,
+	repoName: string,
+	drift: AggregatedDrift,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesSessionResponse> =>
+	createSession(
+		apiKey,
+		{
+			title: `depSync: Fix ${drift.dependencyName}`,
+			prompt: buildFixPayload(
+				drift.dependencyName,
+				drift.payloads,
+				drift.releaseNotes,
+			),
+			sourceContext: {
+				source: `sources/github/${repoOwner}/${repoName}`,
+				githubRepoContext: {
+					startingBranch: "main",
+				},
+			},
+			automationMode: "AUTOMATION_MODE_UNSPECIFIED",
+		},
+		deps,
+	);
 
 /**
  * Gets the details of an existing Jules session.
@@ -180,8 +221,7 @@ export const getJulesSession = async (
 	sessionName: string,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<JulesSessionResponse> => {
-	const url = `${BASE_URL}/${sessionName}`;
-	const response = await deps.fetch(url, {
+	const response = await deps.fetch(`${BASE_URL}/${sessionName}`, {
 		headers: getHeaders(apiKey),
 	});
 	return handleResponse<JulesSessionResponse>(response);
@@ -195,8 +235,7 @@ export const approveJulesPlan = async (
 	sessionName: string,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<void> => {
-	const url = `${BASE_URL}/${sessionName}:approvePlan`;
-	const response = await deps.fetch(url, {
+	const response = await deps.fetch(`${BASE_URL}/${sessionName}:approvePlan`, {
 		method: "POST",
 		headers: getHeaders(apiKey),
 	});
@@ -204,7 +243,7 @@ export const approveJulesPlan = async (
 };
 
 /**
- * Sends a message to an existing Jules session.
+ * Sends a message to an existing Jules session and collects file artifacts.
  */
 export const sendJulesMessage = async (
 	apiKey: string,
@@ -212,9 +251,7 @@ export const sendJulesMessage = async (
 	prompt: string,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<JulesFix[]> => {
-	const url = `${BASE_URL}/${sessionName}:sendMessage`;
-
-	const response = await deps.fetch(url, {
+	const response = await deps.fetch(`${BASE_URL}/${sessionName}:sendMessage`, {
 		method: "POST",
 		headers: getHeaders(apiKey),
 		body: JSON.stringify({ prompt }),
@@ -222,32 +259,18 @@ export const sendJulesMessage = async (
 
 	await handleResponse<void>(response);
 
-	// After sending the message, we need to poll for activities to find the generated PR or files.
-	// For now, we'll fetch the session to see if it has outputs.
-	const session = await getJulesSession(apiKey, sessionName, deps);
-
-	// If Jules created a PR directly via automationMode, we might not get file fixes back.
-	// But according to the command logic, it expects file content to apply locally.
-	// We'll search for artifacts in activities if outputs aren't enough.
-	if (session.outputs) {
-		// Logic to map outputs to JulesFix[] would go here if Jules returns file content.
-		// However, Jules typically creates a PR itself in AUTO_CREATE_PR mode.
-		// If the user wants to apply fixes LOCALLY before pushing themselves,
-		// we might need to change automationMode or extract from activities.
-	}
-
 	const activities = await listJulesActivities(apiKey, sessionName, 20, deps);
 	const fixes: JulesFix[] = [];
 
 	for (const activity of activities.activities) {
-		if (activity.artifacts) {
-			for (const artifact of activity.artifacts) {
-				if (artifact.path && artifact.contents) {
-					fixes.push({
-						filePath: artifact.path as string,
-						fileContent: artifact.contents as string,
-					});
-				}
+		if (!activity.artifacts) continue;
+
+		for (const artifact of activity.artifacts) {
+			if (artifact.path && artifact.contents) {
+				fixes.push({
+					filePath: artifact.path as string,
+					fileContent: artifact.contents as string,
+				});
 			}
 		}
 	}
@@ -264,11 +287,43 @@ export const listJulesActivities = async (
 	pageSize: number = 30,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<JulesActivitiesResponse> => {
-	const url = `${BASE_URL}/${sessionName}/activities?pageSize=${pageSize}`;
-	const response = await deps.fetch(url, {
-		headers: getHeaders(apiKey),
-	});
+	const response = await deps.fetch(
+		`${BASE_URL}/${sessionName}/activities?pageSize=${pageSize}`,
+		{
+			headers: getHeaders(apiKey),
+		},
+	);
 	return handleResponse<JulesActivitiesResponse>(response);
+};
+
+export const summarizeJulesSession = async (
+	apiKey: string,
+	sessionName: string,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesSessionSummary> => {
+	const activities = await listJulesActivities(apiKey, sessionName, 20, deps);
+	const signals = new Set<string>();
+
+	for (const activity of activities.activities) {
+		if (activity.progressUpdated?.title) {
+			signals.add(activity.progressUpdated.title.trim());
+		}
+		if (activity.progressUpdated?.description) {
+			signals.add(activity.progressUpdated.description.trim());
+		}
+		if (activity.planGenerated?.plan.steps) {
+			for (const step of activity.planGenerated.plan.steps) {
+				signals.add(step.title.trim());
+			}
+		}
+	}
+
+	return {
+		activityCount: activities.activities.length,
+		signals: Array.from(signals)
+			.filter((entry) => entry.length > 0)
+			.slice(0, 5),
+	};
 };
 
 /**
@@ -279,9 +334,7 @@ export const deleteJulesSession = async (
 	sessionName: string,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<void> => {
-	const url = `${BASE_URL}/${sessionName}`;
-
-	const response = await deps.fetch(url, {
+	const response = await deps.fetch(`${BASE_URL}/${sessionName}`, {
 		method: "DELETE",
 		headers: {
 			"X-Goog-Api-Key": apiKey,

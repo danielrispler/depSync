@@ -14,6 +14,8 @@ export interface UpdateContext {
 	latestVersion: string;
 }
 
+export type RiskLevel = "low" | "medium" | "high";
+
 export interface AggregatedDrift {
 	dependencyName: string;
 	currentVersions: Set<string>;
@@ -21,7 +23,11 @@ export interface AggregatedDrift {
 	payloads: GeminiPromptPayload[];
 	/** GitHub release notes for the target version, truncated to 3k chars */
 	releaseNotes: string | null;
-	priorityScore: number;
+	driftWeight: number;
+	updateType: UpdateType;
+	affectedPackages: AffectedPackagePointer[];
+	affectedSourceFiles: AffectedSourceFilePointer[];
+	usageCount: number;
 }
 
 export interface PackageContext {
@@ -42,4 +48,47 @@ export interface GeminiPromptPayload {
 	update: UpdateContext;
 	/** The AST analysis of precisely how this dependency is used in this package */
 	usages: DependencyUsage[];
+}
+
+export interface AffectedPackagePointer {
+	packageName: string;
+	packageJsonPath: string;
+}
+
+export interface AffectedSourceFilePointer {
+	packageJsonPath: string;
+	filePath: string;
+}
+
+export interface DepSyncIssueExecutionMetadata {
+	generatedAt: string;
+	affectedFileCount: number;
+	affectedPackageCount: number;
+	julesActivityCount?: number;
+}
+
+export interface DepSyncIssueContext {
+	schemaVersion: 1;
+	dependencyName: string;
+	currentVersions: string[];
+	latestVersion: string;
+	affectedPackages: AffectedPackagePointer[];
+	affectedSourceFiles: AffectedSourceFilePointer[];
+	riskLevel: RiskLevel;
+	issueSummary: string;
+	executionMetadata: DepSyncIssueExecutionMetadata;
+}
+
+export interface DepSyncIssueAnalysis {
+	markdown: string;
+	riskLevel: RiskLevel;
+	issueSummary: string;
+	executionMetadata: DepSyncIssueExecutionMetadata;
+}
+
+export interface NotificationDigestItem {
+	packageName: string;
+	riskLevel: RiskLevel;
+	issueUrl: string;
+	summary: string;
 }

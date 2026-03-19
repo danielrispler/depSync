@@ -1,24 +1,16 @@
 import type { GeminiPromptPayload } from "../../types/drift.js";
 
-/**
- * Represents the structured system instructions and context
- * provided to the Gemini model for analysis.
- */
-export interface GeminiFinalPrompt {
+export interface JulesPromptPayload {
 	instruction: string;
 	dependencyName: string;
 	releaseNotes: string | null;
 	usages: ProcessedUsage[];
 }
 
-/**
- * A flatter, text-optimized version of the UsageContext
- * designed for maximum LLM comprehension and minimal token use.
- */
+export type GeminiFinalPrompt = JulesPromptPayload;
+
 export interface ProcessedUsage {
-	/** The monorepo service/app this usage belongs to */
 	serviceName: string;
-	/** Dense 1-sentence domain description of the service */
 	serviceDescription: string;
 	file: string;
 	importStatement: string;
@@ -40,64 +32,90 @@ export interface ProcessedCaller {
 	line: number;
 }
 
-const INSTRUCTION_TEXT = `You are an expert migration assistant. The target dependency has breaking changes outlined in the [Release Notes]. The monorepo context is provided in the [AST Context]. Generate the exact code required to safely migrate the user's code to the new version.
+const ANALYSIS_INSTRUCTION_TEXT = `You are an expert dependency migration analyst. Review the release notes and AST footprint, then produce a concise impact analysis in markdown.
 
-CRITICAL INSTRUCTIONS:
-1. Explain clearly WHY this update is important and how it will benefit the user (e.g., performance, security, features).
-2. Evaluate the "AST footprint" of this dependency:
-   - If the AST shows this package is heavily imported across multiple services/files, explicitly flag it as a **High-Risk structural update**.
-   - If it is isolated to one or two files with minimal internal exposure, flag it as **Low-Risk**.
-3. Use this footprint analysis to explain HOW this update is safe to perform (e.g. "We only use this in one non-critical service").
-4. If an enclosing function is marked as 'isExported: true', changing its signature or return type is a high-risk BREAKING CHANGE to the rest of the monorepo.
-5. Respond with a technical analysis and specific, targeted code suggestions for any required fixes.`;
+Required sections:
+1. Summary
+2. Risk
+3. Recommended migration focus
 
-/**
- * Pure function that transforms raw orchestrator payloads (with service context)
- * into a highly structured, token-efficient JSON string for the LLM.
- */
-export const buildGeminiPayload = (
-	dependencyName: string,
+Rules:
+- Keep the response under 220 words.
+- Call out whether the dependency is isolated or structurally widespread.
+- Mention the highest-risk files or services only by path/name, never dump full code.
+- Do not propose a pull request or branch strategy.`;
+
+const FIX_INSTRUCTION_TEXT = `You are an expert migration assistant. The target dependency has breaking changes outlined in the release notes and the AST context shows exactly where it is used.
+
+Rules:
+1. Generate the exact code changes needed to safely migrate the codebase.
+2. Prioritize correctness over breadth; only touch files that require changes.
+3. If an exported function signature would need to change, treat that as high risk and explain it clearly.
+4. Return actionable implementation output suitable for downstream file patch application.`;
+
+const toProcessedUsages = (
 	payloads: ReadonlyArray<GeminiPromptPayload>,
-	releaseNotes: string | null,
-): string => {
-	const processedUsages: ProcessedUsage[] = payloads.flatMap((payload) =>
+): ProcessedUsage[] =>
+	payloads.flatMap((payload) =>
 		payload.usages.flatMap((usage) =>
-			usage.usages.map((ctx) => {
-				const enclosingFunc: ProcessedEnclosingFunction | null =
-					ctx.enclosingFunction
-						? {
-								name: ctx.enclosingFunction.name,
-								signature: ctx.enclosingFunction.signature,
-								body: ctx.enclosingFunction.body,
-								isExported: ctx.enclosingFunction.isExported,
-								localCallers: ctx.localCallers.map((caller) => ({
-									statement: caller.statement,
-									line: caller.line,
-								})),
-							}
-						: null;
-
-				return {
-					serviceName: payload.package.packageName,
-					serviceDescription: payload.package.serviceDescription,
-					file: usage.file,
-					importStatement: usage.importStatement,
-					callingStatement: ctx.statement,
-					line: ctx.line,
-					enclosingFunction: enclosingFunc,
-				};
-			}),
+			usage.usages.map((ctx) => ({
+				serviceName: payload.package.packageName,
+				serviceDescription: payload.package.serviceDescription,
+				file: usage.file,
+				importStatement: usage.importStatement,
+				callingStatement: ctx.statement,
+				line: ctx.line,
+				enclosingFunction: ctx.enclosingFunction
+					? {
+							name: ctx.enclosingFunction.name,
+							signature: ctx.enclosingFunction.signature,
+							body: ctx.enclosingFunction.body,
+							isExported: ctx.enclosingFunction.isExported,
+							localCallers: ctx.localCallers.map((caller) => ({
+								statement: caller.statement,
+								line: caller.line,
+							})),
+						}
+					: null,
+			})),
 		),
 	);
 
-	const geminiPayload: GeminiFinalPrompt = {
-		instruction: INSTRUCTION_TEXT,
+const buildPromptPayload = (
+	instruction: string,
+	dependencyName: string,
+	payloads: ReadonlyArray<GeminiPromptPayload>,
+	releaseNotes: string | null,
+): string =>
+	JSON.stringify({
+		instruction,
 		dependencyName,
 		releaseNotes,
-		usages: processedUsages,
-	};
+		usages: toProcessedUsages(payloads),
+	} satisfies JulesPromptPayload);
 
-	// We use standard JSON.stringify here instead of formatted space,
-	// as this is for LLM API transport, minimizing string size/tokens.
-	return JSON.stringify(geminiPayload);
-};
+export const buildAnalysisPayload = (
+	dependencyName: string,
+	payloads: ReadonlyArray<GeminiPromptPayload>,
+	releaseNotes: string | null,
+): string =>
+	buildPromptPayload(
+		ANALYSIS_INSTRUCTION_TEXT,
+		dependencyName,
+		payloads,
+		releaseNotes,
+	);
+
+export const buildFixPayload = (
+	dependencyName: string,
+	payloads: ReadonlyArray<GeminiPromptPayload>,
+	releaseNotes: string | null,
+): string =>
+	buildPromptPayload(
+		FIX_INSTRUCTION_TEXT,
+		dependencyName,
+		payloads,
+		releaseNotes,
+	);
+
+export const buildGeminiPayload: typeof buildFixPayload = buildFixPayload;

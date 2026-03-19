@@ -1,7 +1,13 @@
 import { dirname } from "node:path";
 
 import { getExternalDependencies } from "../../clients/npm.js";
-import { type GeminiPromptPayload, UpdateType } from "../../types/drift.js";
+import {
+	type AffectedPackagePointer,
+	type AffectedSourceFilePointer,
+	type GeminiPromptPayload,
+	type RiskLevel,
+	UpdateType,
+} from "../../types/drift.js";
 import type { PackageJson } from "../scanner/scanner.js";
 
 export type DependencyMap = Map<
@@ -9,47 +15,35 @@ export type DependencyMap = Map<
 	Array<{ path: string; pkg: PackageJson; currentVersion: string }>
 >;
 
-// ------------------------------------------------------------------
-// Constants & Scoring
-// ------------------------------------------------------------------
+const getSemverWeight = (updateType: UpdateType): number => {
+	switch (updateType) {
+		case UpdateType.MAJOR:
+			return 300;
+		case UpdateType.MINOR:
+			return 200;
+		default:
+			return 100;
+	}
+};
 
 /**
- * High-impact infrastructure packages that deserve priority weighting.
+ * Calculates a priority weight where higher is higher priority.
+ * The framework bonus is intentionally smaller than the semver step so
+ * framework minors never outrank non-framework majors.
  */
-const CORE_INFRASTRUCTURE: Set<string> = new Set([
-	"typescript",
-	"react",
-	"next",
-	"@angular/core",
-	"vue",
-	"redis",
-	"mongodb",
-	"aws-sdk",
-	"@aws-sdk/client-s3",
-	"amqplib",
-	"express",
-	"fastify",
-	"pg",
-	"prisma",
-]);
-
-/**
- * Calculates a priority score where lower is higher priority.
- * 1. Base score starts with UpdateType (Major=0, Minor=100, Patch=200).
- * 2. If it's a CORE_INFRASTRUCTURE package, subtract 50 from its score.
- */
-export const calculatePriorityScore = (
+export const calculateDriftWeight = (
 	packageName: string,
 	updateType: UpdateType,
+	coreFrameworks: ReadonlySet<string>,
+	astUsageCount: number = 0,
 ): number => {
-	let score = updateType * 100;
+	let score = getSemverWeight(updateType);
 
-	if (
-		CORE_INFRASTRUCTURE.has(packageName) ||
-		packageName.startsWith("@aws-sdk/")
-	) {
-		score -= 50;
+	if (coreFrameworks.has(packageName)) {
+		score += 40;
 	}
+
+	score += Math.min(astUsageCount, 25);
 
 	return score;
 };
@@ -144,3 +138,50 @@ export const getUpdateType = (current: string, latest: string): UpdateType => {
 	if (c[1] !== l[1]) return UpdateType.MINOR;
 	return UpdateType.PATCH;
 };
+
+export const calculateRiskLevel = (
+	updateType: UpdateType,
+	affectedPackageCount: number,
+	usageCount: number,
+): RiskLevel => {
+	if (
+		updateType === UpdateType.MAJOR &&
+		(affectedPackageCount > 1 || usageCount >= 5)
+	) {
+		return "high";
+	}
+
+	if (
+		updateType === UpdateType.MAJOR ||
+		affectedPackageCount > 1 ||
+		usageCount >= 2
+	) {
+		return "medium";
+	}
+
+	return "low";
+};
+
+export const buildAffectedPackagePointers = (
+	payloads: ReadonlyArray<GeminiPromptPayload>,
+	packageJsonPaths: ReadonlyMap<string, string>,
+): AffectedPackagePointer[] =>
+	payloads.map((payload) => ({
+		packageName: payload.package.packageName,
+		packageJsonPath:
+			packageJsonPaths.get(payload.package.packageName) ??
+			`${payload.package.packagePath}/package.json`,
+	}));
+
+export const buildAffectedSourceFilePointers = (
+	payloads: ReadonlyArray<GeminiPromptPayload>,
+	packageJsonPaths: ReadonlyMap<string, string>,
+): AffectedSourceFilePointer[] =>
+	payloads.flatMap((payload) =>
+		payload.usages.map((usage) => ({
+			packageJsonPath:
+				packageJsonPaths.get(payload.package.packageName) ??
+				`${payload.package.packagePath}/package.json`,
+			filePath: usage.file,
+		})),
+	);

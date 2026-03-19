@@ -1,8 +1,16 @@
+import { createHmac } from "node:crypto";
 import * as core from "@actions/core";
+import type { NotificationDigestItem } from "../types/drift.js";
 
 export interface NotifierDependencies {
 	fetch: typeof fetch;
 	warning: typeof core.warning;
+}
+
+export interface NotificationDigestPayload {
+	repository: string;
+	generatedAt: string;
+	issues: NotificationDigestItem[];
 }
 
 const defaultDependencies: NotifierDependencies = {
@@ -10,36 +18,47 @@ const defaultDependencies: NotifierDependencies = {
 	warning: core.warning,
 };
 
+const createSignature = (
+	body: string,
+	secret: string | undefined,
+): string | undefined => {
+	if (!secret) return undefined;
+	return createHmac("sha256", secret).update(body).digest("hex");
+};
+
 /**
- * Sends a simple, unified push notification payload to a generic webhook URL.
- * Designed to be compatible with Discord, Slack, or generic catchers.
+ * Sends a single batched notification payload to a generic webhook.
  *
- * Fails gracefully: If the webhook fails, the core action still succeeds.
+ * Fails gracefully: any network or non-2xx error is downgraded to a warning.
  */
 export const sendNotification = async (
 	webhookUrl: string | undefined,
-	message: string,
+	webhookSecret: string | undefined,
+	payload: NotificationDigestPayload,
 	deps: NotifierDependencies = defaultDependencies,
 ): Promise<void> => {
-	if (!webhookUrl) return;
+	if (!webhookUrl || payload.issues.length === 0) return;
+
+	const body = JSON.stringify(payload);
+	const signature = createSignature(body, webhookSecret);
 
 	try {
 		const response = await deps.fetch(webhookUrl, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
+				...(signature ? { "x-depsync-signature": signature } : {}),
 			},
-			body: JSON.stringify({ text: message, content: message }),
+			body,
 		});
 
 		if (!response.ok) {
 			deps.warning(
-				`Webhook notification failed with status: ${response.status}`,
+				`Notification webhook failed with status: ${response.status}`,
 			);
 		}
 	} catch (error) {
-		// Swallow the network error gracefully to not crash the GitHub Action
-		const msg = error instanceof Error ? error.message : String(error);
-		deps.warning(`Failed to send webhook notification: ${msg}`);
+		const message = error instanceof Error ? error.message : String(error);
+		deps.warning(`Failed to send notification webhook: ${message}`);
 	}
 };

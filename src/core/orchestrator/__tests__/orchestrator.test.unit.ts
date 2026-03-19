@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { UpdateType } from "../../../types/drift.js";
 import type { PackageJson } from "../../scanner/scanner.js";
 import {
 	buildPackagePayload,
+	calculateDriftWeight,
 	extractServiceDescription,
 } from "../orchestrator.utils.js";
 
@@ -69,6 +71,42 @@ describe("Orchestrator Utilities", () => {
 
 			// Usages are initialized empty, waiting for AST extraction
 			expect(payload.usages).toEqual([]);
+		});
+	});
+
+	describe("calculateDriftWeight", () => {
+		it("prioritizes configured core-framework majors over standard majors", () => {
+			const coreFrameworks = new Set(["@angular/core", "express"]);
+
+			const frameworkMajor = calculateDriftWeight(
+				"@angular/core",
+				UpdateType.MAJOR,
+				coreFrameworks,
+			);
+			const standardMajor = calculateDriftWeight(
+				"left-pad",
+				UpdateType.MAJOR,
+				coreFrameworks,
+			);
+
+			expect(frameworkMajor).toBeGreaterThan(standardMajor);
+		});
+
+		it("keeps non-framework majors above framework minors", () => {
+			const coreFrameworks = new Set(["express"]);
+
+			const standardMajor = calculateDriftWeight(
+				"left-pad",
+				UpdateType.MAJOR,
+				coreFrameworks,
+			);
+			const frameworkMinor = calculateDriftWeight(
+				"express",
+				UpdateType.MINOR,
+				coreFrameworks,
+			);
+
+			expect(standardMajor).toBeGreaterThan(frameworkMinor);
 		});
 	});
 });

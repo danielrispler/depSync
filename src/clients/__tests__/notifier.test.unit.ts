@@ -7,13 +7,24 @@ describe("sendNotification", () => {
 	});
 
 	const mockWebhookUrl = "https://example.com/webhook";
-	const mockMessage = "Test alert!";
+	const payload = {
+		repository: "owner/repo",
+		generatedAt: "2026-03-19T12:00:00.000Z",
+		issues: [
+			{
+				packageName: "react",
+				riskLevel: "high" as const,
+				issueUrl: "https://github.com/owner/repo/issues/1",
+				summary: "react affects 2 packages.",
+			},
+		],
+	};
 
-	it("should return silently if webhookUrl is completely empty or undefined", async () => {
+	it("should return silently if webhookUrl is missing", async () => {
 		const mockFetch = vi.fn();
 		const mockWarning = vi.fn();
 
-		await sendNotification("", mockMessage, {
+		await sendNotification(undefined, undefined, payload, {
 			fetch: mockFetch as any,
 			warning: mockWarning as any,
 		});
@@ -22,11 +33,24 @@ describe("sendNotification", () => {
 		expect(mockWarning).not.toHaveBeenCalled();
 	});
 
-	it("should send a POST request with the exact message in the payload", async () => {
+	it("should return silently if the digest is empty", async () => {
+		const mockFetch = vi.fn();
+
+		await sendNotification(
+			mockWebhookUrl,
+			undefined,
+			{ ...payload, issues: [] },
+			{ fetch: mockFetch as any, warning: vi.fn() as any },
+		);
+
+		expect(mockFetch).not.toHaveBeenCalled();
+	});
+
+	it("should send a POST request with a signed JSON payload", async () => {
 		const mockFetch = vi.fn().mockResolvedValue({ ok: true });
 		const mockWarning = vi.fn();
 
-		await sendNotification(mockWebhookUrl, mockMessage, {
+		await sendNotification(mockWebhookUrl, "secret", payload, {
 			fetch: mockFetch as any,
 			warning: mockWarning as any,
 		});
@@ -35,8 +59,11 @@ describe("sendNotification", () => {
 			mockWebhookUrl,
 			expect.objectContaining({
 				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ text: mockMessage, content: mockMessage }),
+				body: JSON.stringify(payload),
+				headers: expect.objectContaining({
+					"Content-Type": "application/json",
+					"x-depsync-signature": expect.any(String),
+				}),
 			}),
 		);
 		expect(mockWarning).not.toHaveBeenCalled();
@@ -46,27 +73,27 @@ describe("sendNotification", () => {
 		const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 403 });
 		const mockWarning = vi.fn();
 
-		await sendNotification(mockWebhookUrl, mockMessage, {
+		await sendNotification(mockWebhookUrl, undefined, payload, {
 			fetch: mockFetch as any,
 			warning: mockWarning as any,
 		});
 
 		expect(mockWarning).toHaveBeenCalledWith(
-			"Webhook notification failed with status: 403",
+			"Notification webhook failed with status: 403",
 		);
 	});
 
-	it("should safely catch and warn on hard network failures without crashing execution", async () => {
+	it("should safely catch and warn on network failures without crashing execution", async () => {
 		const mockFetch = vi.fn().mockRejectedValue(new Error("Timeout"));
 		const mockWarning = vi.fn();
 
-		await sendNotification(mockWebhookUrl, mockMessage, {
+		await sendNotification(mockWebhookUrl, undefined, payload, {
 			fetch: mockFetch as any,
 			warning: mockWarning as any,
 		});
 
 		expect(mockWarning).toHaveBeenCalledWith(
-			"Failed to send webhook notification: Timeout",
+			"Failed to send notification webhook: Timeout",
 		);
 	});
 });
