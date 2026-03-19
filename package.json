@@ -21,6 +21,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.6",
 		"@types/node": "^25.4.0",
+		"@types/semver": "^7.7.1",
 		"@vercel/ncc": "^0.38.4",
 		"typescript": "^5.9.3",
 		"vitest": "^4.0.18"
@@ -30,6 +31,7 @@
 		"@actions/github": "^6.0.0",
 		"@actions/glob": "^0.4.0",
 		"@google/genai": "^1.45.0",
+		"semver": "^7.7.4",
 		"ts-morph": "^27.0.2"
 	}
 }

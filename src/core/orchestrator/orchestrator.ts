@@ -111,12 +111,15 @@ const analyzeDependencyUsage = async (
 				payloads.push(packagePayload);
 			}
 
+			// Aggressive memory cleanup: remove all source files from the project instance
+			// to free up ts-morph node memory before processing the next package.
 			for (const sourceFile of project.getSourceFiles()) {
 				project.removeSourceFile(sourceFile);
 			}
 		}
 	} finally {
-		// ts-morph releases removed source files without requiring explicit disposal.
+		// No-op - ts-morph Project doesn't require explicit disposal,
+		// and we've already cleared source files in the loop.
 	}
 
 	const usageCount = payloads.reduce(

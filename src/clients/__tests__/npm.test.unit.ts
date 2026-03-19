@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getLatestVersion, isUpdateNeeded } from "../npm.js";
+import {
+	clearRegistryCache,
+	getLatestVersion,
+	isUpdateNeeded,
+} from "../npm.js";
 
 describe("getLatestVersion", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		clearRegistryCache();
 	});
 
 	it("should return the latest version from the npm registry dist-tags", async () => {
@@ -52,7 +57,7 @@ describe("getLatestVersion", () => {
 			getLatestVersion("some-private-package", {
 				fetch: mockFetch as typeof fetch,
 			}),
-		).rejects.toThrow("Failed to fetch registry data for package");
+		).rejects.toThrow("Failed to fetch registry data for some-private-package");
 	});
 
 	it("should propagate network-level errors (e.g. DNS failure) without swallowing them", async () => {
@@ -62,6 +67,29 @@ describe("getLatestVersion", () => {
 			getLatestVersion("vitest", { fetch: mockFetch as typeof fetch }),
 		).rejects.toThrow("fetch failed");
 	});
+
+	it("should return cached results for the same package during the same run", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: vi.fn().mockResolvedValue({
+				name: "vitest",
+				"dist-tags": { latest: "4.0.18" },
+			}),
+		});
+
+		// First call
+		const result1 = await getLatestVersion("vitest", {
+			fetch: mockFetch as typeof fetch,
+		});
+		// Second call
+		const result2 = await getLatestVersion("vitest", {
+			fetch: mockFetch as typeof fetch,
+		});
+
+		expect(result1).toBe("4.0.18");
+		expect(result2).toBe("4.0.18");
+		expect(mockFetch).toHaveBeenCalledOnce();
+	});
 });
 
 describe("isUpdateNeeded", () => {
@@ -69,18 +97,33 @@ describe("isUpdateNeeded", () => {
 		expect(isUpdateNeeded("4.0.18", "4.0.18")).toBe(false);
 	});
 
-	it("should return true when the current version is behind the latest version", () => {
+	it("should return true when the current version is behind the latest version (exact)", () => {
 		expect(isUpdateNeeded("4.0.0", "4.0.18")).toBe(true);
 	});
 
-	it("should strip a caret (^) prefix before comparing", () => {
+	it("should return false when latest satisfies a caret (^) range", () => {
 		expect(isUpdateNeeded("^4.0.18", "4.0.18")).toBe(false);
-		expect(isUpdateNeeded("^4.0.0", "4.0.18")).toBe(true);
+		expect(isUpdateNeeded("^4.0.0", "4.0.18")).toBe(false);
+		expect(isUpdateNeeded("^4.0.0", "5.0.0")).toBe(true);
 	});
 
-	it("should strip a tilde (~) prefix before comparing", () => {
-		expect(isUpdateNeeded("~4.0.18", "4.0.18")).toBe(false);
-		expect(isUpdateNeeded("~4.0.0", "4.0.18")).toBe(true);
+	it("should ignore prereleases even if they are newer", () => {
+		expect(isUpdateNeeded("1.0.0", "1.1.0-alpha.1")).toBe(false);
+		expect(isUpdateNeeded("^1.0.0", "2.0.0-beta.5")).toBe(false);
+	});
+
+	it("should respect the range and returns false if latest satisfies it", () => {
+		// Rule: If it satisfies, it's NOT a drift.
+		expect(isUpdateNeeded(">=1.0.0 <2.0.0", "1.5.0")).toBe(false);
+		expect(isUpdateNeeded("1.2.x", "1.2.5")).toBe(false);
+		expect(isUpdateNeeded("^1.0.0", "1.1.0")).toBe(false);
+		expect(isUpdateNeeded("~1.0.0", "1.0.5")).toBe(false);
+	});
+
+	it("should return true ONLY if latest stable is outside the range", () => {
+		expect(isUpdateNeeded(">=1.0.0 <2.0.0", "2.0.0")).toBe(true);
+		expect(isUpdateNeeded("1.2.x", "1.3.0")).toBe(true);
+		expect(isUpdateNeeded("^1.0.0", "2.0.0")).toBe(true);
 	});
 });
 

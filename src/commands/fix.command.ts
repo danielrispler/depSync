@@ -1,15 +1,21 @@
-import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
+import { rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as core from "@actions/core";
 import * as github from "@actions/github";
 import { addCommentReaction } from "../clients/github.js";
 import {
 	createJulesFixSession,
 	deleteJulesSession,
-	sendJulesMessage,
+	extractPatchArtifacts,
+	listAllJulesActivities,
+	resolveJulesSource,
+	waitForJulesSession,
 } from "../clients/jules.js";
 import { parseIssueContext } from "../core/orchestrator/issue-context.js";
 import { rebuildDriftFromIssueContext } from "../core/orchestrator/orchestrator.js";
-import { gitOps } from "../infrastructure/git.js";
+import { GitPatchApplyError, gitOps } from "../infrastructure/git.js";
 
 interface CommandContext {
 	githubToken: string;
@@ -33,12 +39,48 @@ const notifyStart = async (ctx: CommandContext): Promise<void> => {
 	});
 };
 
-const applyFixesToDisk = (
-	fixes: Array<{ filePath: string; fileContent: string }>,
-): void => {
-	for (const fix of fixes) {
-		core.info(`📝 Applying fix to ${fix.filePath}...`);
-		fs.writeFileSync(fix.filePath, fix.fileContent);
+const createPatchFile = async (patch: string): Promise<string> => {
+	const patchFilePath = join(tmpdir(), `depsync-${randomUUID()}.patch`);
+	await writeFile(patchFilePath, patch, "utf-8");
+	return patchFilePath;
+};
+
+const describePatch = (patch: string, activityName: string): string => {
+	const diffLine = patch
+		.split("\n")
+		.find((line) => line.startsWith("diff --git "));
+	return diffLine ?? activityName;
+};
+
+const applyPatchArtifactsSequentially = async (
+	_ctx: CommandContext,
+	patches: ReturnType<typeof extractPatchArtifacts>,
+): Promise<void> => {
+	let appliedAnyPatch = false;
+
+	for (const patchArtifact of patches) {
+		const patchLabel = describePatch(
+			patchArtifact.patch,
+			patchArtifact.activityName,
+		);
+		const patchFilePath = await createPatchFile(patchArtifact.patch);
+
+		try {
+			gitOps.applyPatchFile(patchFilePath, patchLabel);
+			appliedAnyPatch = true;
+		} catch (error) {
+			if (appliedAnyPatch) {
+				gitOps.restoreWorkingTree();
+			}
+
+			const message = error instanceof Error ? error.message : String(error);
+			throw new GitPatchApplyError(
+				patchLabel,
+				`Patch ${patchLabel} from ${patchArtifact.activityName} failed: ${message}`,
+			);
+		} finally {
+			await rm(patchFilePath, { force: true });
+		}
 	}
 };
 
@@ -129,27 +171,21 @@ export const handleFixCommand = async (
 			githubToken,
 			coreFrameworks,
 		);
-
-		const session = await createJulesFixSession(
+		const source = await resolveJulesSource(
 			julesApiKey,
 			context.repo.owner,
 			context.repo.repo,
-			drift,
 		);
+
+		const session = await createJulesFixSession(julesApiKey, source, drift);
 		sessionName = session.name;
 
-		const fixes = await sendJulesMessage(
-			julesApiKey,
-			session.name,
-			"Generate the code changes required for this migration.",
-		);
-
-		if (fixes.length === 0) {
-			throw new Error("Jules AI did not return any file fixes.");
-		}
+		await waitForJulesSession(julesApiKey, session.name);
+		const activities = await listAllJulesActivities(julesApiKey, session.name);
+		const patches = extractPatchArtifacts(session.name, activities);
+		await applyPatchArtifactsSequentially(context, patches);
 
 		const branchName = `depsync/fix-issue-${issueNumber}`;
-		applyFixesToDisk(fixes);
 		await pushFixesToGithub(context, branchName);
 		await createFixPullRequest(context, branchName);
 	} catch (error) {

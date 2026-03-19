@@ -4,6 +4,21 @@ import {
 } from "../core/orchestrator/payload.js";
 import type { AggregatedDrift } from "../types/drift.js";
 
+export type JulesSessionState =
+	| "QUEUED"
+	| "PLANNING"
+	| "AWAITING_PLAN_APPROVAL"
+	| "AWAITING_USER_FEEDBACK"
+	| "IN_PROGRESS"
+	| "PAUSED"
+	| "COMPLETED"
+	| "FAILED";
+
+export interface ResolvedJulesSource {
+	sourceName: string;
+	defaultBranch: string;
+}
+
 export interface JulesSessionRequest {
 	title: string;
 	prompt: string;
@@ -13,7 +28,7 @@ export interface JulesSessionRequest {
 			startingBranch: string;
 		};
 	};
-	automationMode: "AUTOMATION_MODE_UNSPECIFIED" | "AUTO_CREATE_PR";
+	automationMode?: "AUTOMATION_MODE_UNSPECIFIED" | "AUTO_CREATE_PR";
 	requirePlanApproval?: boolean;
 }
 
@@ -21,6 +36,7 @@ export interface JulesSessionResponse {
 	name: string;
 	id: string;
 	title: string;
+	state: JulesSessionState;
 	sourceContext: {
 		source: string;
 		githubRepoContext: {
@@ -43,6 +59,13 @@ export interface JulesSource {
 	githubRepo: {
 		owner: string;
 		repo: string;
+		isPrivate?: boolean;
+		defaultBranch?: {
+			displayName: string;
+		};
+		branches?: Array<{
+			displayName: string;
+		}>;
 	};
 }
 
@@ -51,49 +74,159 @@ export interface JulesSourcesResponse {
 	nextPageToken?: string;
 }
 
-export interface JulesActivity {
+interface JulesPlanStep {
+	id: string;
+	title: string;
+	index?: number;
+}
+
+export interface JulesBaseActivity {
 	name: string;
 	id: string;
 	createTime: string;
 	originator: "agent" | "user";
-	planGenerated?: {
+	artifacts?: JulesArtifact[];
+}
+
+export interface JulesPlanGeneratedActivity extends JulesBaseActivity {
+	planGenerated: {
 		plan: {
 			id: string;
-			steps: Array<{
-				id: string;
-				title: string;
-				index?: number;
-			}>;
+			steps: JulesPlanStep[];
 		};
 	};
-	planApproved?: {
+}
+
+export interface JulesPlanApprovedActivity extends JulesBaseActivity {
+	planApproved: {
 		planId: string;
 	};
-	progressUpdated?: {
+}
+
+export interface JulesUserMessagedActivity extends JulesBaseActivity {
+	userMessaged: {
+		userMessage: string;
+	};
+}
+
+export interface JulesAgentMessagedActivity extends JulesBaseActivity {
+	agentMessaged: {
+		agentMessage: string;
+	};
+}
+
+export interface JulesProgressUpdatedActivity extends JulesBaseActivity {
+	progressUpdated: {
 		title: string;
 		description?: string;
 	};
-	sessionCompleted?: Record<string, unknown>;
-	artifacts?: Array<Record<string, unknown>>;
 }
+
+export interface JulesSessionCompletedActivity extends JulesBaseActivity {
+	sessionCompleted: Record<string, never>;
+}
+
+export interface JulesSessionFailedActivity extends JulesBaseActivity {
+	sessionFailed: {
+		reason?: string;
+	};
+}
+
+export type JulesActivity =
+	| JulesPlanGeneratedActivity
+	| JulesPlanApprovedActivity
+	| JulesUserMessagedActivity
+	| JulesAgentMessagedActivity
+	| JulesProgressUpdatedActivity
+	| JulesSessionCompletedActivity
+	| JulesSessionFailedActivity
+	| JulesBaseActivity;
 
 export interface JulesActivitiesResponse {
 	activities: JulesActivity[];
 	nextPageToken?: string;
 }
 
-export interface JulesFix {
-	filePath: string;
-	fileContent: string;
+export interface JulesChangeSetArtifact {
+	changeSet: {
+		source: string;
+		gitPatch: {
+			baseCommitId: string;
+			unidiffPatch: string;
+			suggestedCommitMessage?: string;
+		};
+	};
+}
+
+export interface JulesBashOutputArtifact {
+	bashOutput: {
+		command: string;
+		output: string;
+		exitCode: number;
+	};
+}
+
+export type JulesArtifact =
+	| JulesChangeSetArtifact
+	| JulesBashOutputArtifact
+	| Record<string, unknown>;
+
+export interface JulesPatchArtifact {
+	activityName: string;
+	createTime: string;
+	patch: string;
+	suggestedCommitMessage?: string;
 }
 
 export interface JulesSessionSummary {
 	activityCount: number;
-	signals: string[];
+	analysisMarkdown: string | null;
 }
 
 export interface JulesDependencies {
 	fetch: typeof fetch;
+}
+
+export class JulesApiError extends Error {
+	readonly status: number;
+
+	constructor(status: number, message: string) {
+		super(message);
+		this.name = "JulesApiError";
+		this.status = status;
+	}
+}
+
+export class JulesSourceNotFoundError extends Error {
+	constructor(owner: string, repo: string) {
+		super(`Could not resolve Jules source for ${owner}/${repo}.`);
+		this.name = "JulesSourceNotFoundError";
+	}
+}
+
+export class JulesSessionStatusError extends Error {
+	readonly sessionName: string;
+	readonly state: JulesSessionState | "TIMEOUT";
+
+	constructor(
+		sessionName: string,
+		state: JulesSessionState | "TIMEOUT",
+		message: string,
+	) {
+		super(message);
+		this.name = "JulesSessionStatusError";
+		this.sessionName = sessionName;
+		this.state = state;
+	}
+}
+
+export class JulesMissingPatchArtifactError extends Error {
+	constructor(sessionName: string) {
+		super(
+			`No git patch artifacts were found for Jules session ${sessionName}.`,
+		);
+		this.name = "JulesMissingPatchArtifactError";
+	}
 }
 
 const defaultDependencies: JulesDependencies = {
@@ -101,6 +234,10 @@ const defaultDependencies: JulesDependencies = {
 };
 
 const BASE_URL = "https://jules.googleapis.com/v1alpha";
+const DEFAULT_PAGE_SIZE = 100;
+const INITIAL_POLL_DELAY_MS = 5_000;
+const MAX_POLL_DELAY_MS = 15_000;
+const MAX_POLL_WAIT_MS: number = 10 * 60 * 1_000;
 
 const getHeaders = (apiKey: string): Record<string, string> => ({
 	"Content-Type": "application/json",
@@ -109,14 +246,16 @@ const getHeaders = (apiKey: string): Record<string, string> => ({
 
 const handleResponse = async <T>(response: Response): Promise<T> => {
 	if (response.status === 429) {
-		throw new Error(
+		throw new JulesApiError(
+			429,
 			"Jules API rate limit exceeded (429). Please retry in one hour.",
 		);
 	}
 
 	if (!response.ok) {
 		const errorBody = await response.text();
-		throw new Error(
+		throw new JulesApiError(
+			response.status,
 			`Jules API request failed with status ${response.status}: ${errorBody}`,
 		);
 	}
@@ -128,6 +267,11 @@ const handleResponse = async <T>(response: Response): Promise<T> => {
 	const text = await response.text();
 	return (text ? JSON.parse(text) : {}) as T;
 };
+
+const sleep = async (ms: number): Promise<void> =>
+	new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
 
 const createSession = async (
 	apiKey: string,
@@ -143,23 +287,88 @@ const createSession = async (
 	return handleResponse<JulesSessionResponse>(response);
 };
 
-/**
- * Lists available sources for the Jules API.
- */
 export const listJulesSources = async (
 	apiKey: string,
+	pageSize: number = DEFAULT_PAGE_SIZE,
+	pageToken: string | undefined = undefined,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<JulesSourcesResponse> => {
-	const response = await deps.fetch(`${BASE_URL}/sources`, {
-		headers: getHeaders(apiKey),
+	const params = new URLSearchParams({
+		pageSize: String(pageSize),
 	});
+
+	if (pageToken) {
+		params.set("pageToken", pageToken);
+	}
+
+	const response = await deps.fetch(
+		`${BASE_URL}/sources?${params.toString()}`,
+		{
+			headers: getHeaders(apiKey),
+		},
+	);
+
 	return handleResponse<JulesSourcesResponse>(response);
 };
 
+export const resolveJulesSource = async (
+	apiKey: string,
+	owner: string,
+	repo: string,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<ResolvedJulesSource> => {
+	let pageToken: string | undefined;
+
+	do {
+		const response = await listJulesSources(
+			apiKey,
+			DEFAULT_PAGE_SIZE,
+			pageToken,
+			deps,
+		);
+		const source = response.sources.find(
+			(candidate) =>
+				candidate.githubRepo.owner === owner &&
+				candidate.githubRepo.repo === repo,
+		);
+
+		if (source) {
+			return {
+				sourceName: source.name,
+				defaultBranch: source.githubRepo.defaultBranch?.displayName ?? "main",
+			};
+		}
+
+		pageToken = response.nextPageToken;
+	} while (pageToken);
+
+	throw new JulesSourceNotFoundError(owner, repo);
+};
+
+const getSessionFailureReason = (
+	activities: ReadonlyArray<JulesActivity>,
+): string | undefined => {
+	for (let index: number = activities.length - 1; index >= 0; index -= 1) {
+		const activity = activities[index];
+		if (!activity) continue;
+
+		if ("sessionFailed" in activity && activity.sessionFailed?.reason) {
+			return activity.sessionFailed.reason;
+		}
+	}
+
+	return undefined;
+};
+
+const isChangeSetArtifact = (
+	artifact: JulesArtifact,
+): artifact is JulesChangeSetArtifact =>
+	typeof (artifact as JulesChangeSetArtifact | undefined)?.changeSet?.gitPatch
+		?.unidiffPatch === "string";
+
 export const createJulesAnalysisSession = async (
 	apiKey: string,
-	repoOwner: string,
-	repoName: string,
+	source: ResolvedJulesSource,
 	drift: AggregatedDrift,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<JulesSessionResponse> =>
@@ -173,9 +382,9 @@ export const createJulesAnalysisSession = async (
 				drift.releaseNotes,
 			),
 			sourceContext: {
-				source: `sources/github/${repoOwner}/${repoName}`,
+				source: source.sourceName,
 				githubRepoContext: {
-					startingBranch: "main",
+					startingBranch: source.defaultBranch,
 				},
 			},
 			automationMode: "AUTOMATION_MODE_UNSPECIFIED",
@@ -188,8 +397,7 @@ export const createJulesSession: typeof createJulesAnalysisSession =
 
 export const createJulesFixSession = async (
 	apiKey: string,
-	repoOwner: string,
-	repoName: string,
+	source: ResolvedJulesSource,
 	drift: AggregatedDrift,
 	deps: JulesDependencies = defaultDependencies,
 ): Promise<JulesSessionResponse> =>
@@ -203,9 +411,9 @@ export const createJulesFixSession = async (
 				drift.releaseNotes,
 			),
 			sourceContext: {
-				source: `sources/github/${repoOwner}/${repoName}`,
+				source: source.sourceName,
 				githubRepoContext: {
-					startingBranch: "main",
+					startingBranch: source.defaultBranch,
 				},
 			},
 			automationMode: "AUTOMATION_MODE_UNSPECIFIED",
@@ -213,9 +421,6 @@ export const createJulesFixSession = async (
 		deps,
 	);
 
-/**
- * Gets the details of an existing Jules session.
- */
 export const getJulesSession = async (
 	apiKey: string,
 	sessionName: string,
@@ -227,9 +432,155 @@ export const getJulesSession = async (
 	return handleResponse<JulesSessionResponse>(response);
 };
 
-/**
- * Approves the latest plan in a Jules session.
- */
+export const listJulesActivities = async (
+	apiKey: string,
+	sessionName: string,
+	pageSize: number = DEFAULT_PAGE_SIZE,
+	pageToken: string | undefined = undefined,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesActivitiesResponse> => {
+	const params = new URLSearchParams({
+		pageSize: String(pageSize),
+	});
+
+	if (pageToken) {
+		params.set("pageToken", pageToken);
+	}
+
+	const response = await deps.fetch(
+		`${BASE_URL}/${sessionName}/activities?${params.toString()}`,
+		{
+			headers: getHeaders(apiKey),
+		},
+	);
+	return handleResponse<JulesActivitiesResponse>(response);
+};
+
+export const listAllJulesActivities = async (
+	apiKey: string,
+	sessionName: string,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesActivity[]> => {
+	let pageToken: string | undefined;
+	const activities: JulesActivity[] = [];
+
+	do {
+		const response = await listJulesActivities(
+			apiKey,
+			sessionName,
+			DEFAULT_PAGE_SIZE,
+			pageToken,
+			deps,
+		);
+		activities.push(...response.activities);
+		pageToken = response.nextPageToken;
+	} while (pageToken);
+
+	return activities.sort(
+		(left, right) =>
+			new Date(left.createTime).getTime() -
+			new Date(right.createTime).getTime(),
+	);
+};
+
+export const extractAnalysisMarkdown = (
+	activities: ReadonlyArray<JulesActivity>,
+): string | null => {
+	for (let index = activities.length - 1; index >= 0; index -= 1) {
+		const activity = activities[index];
+		if (!activity) continue;
+
+		if ("agentMessaged" in activity && activity.agentMessaged?.agentMessage) {
+			return activity.agentMessaged.agentMessage;
+		}
+	}
+
+	return null;
+};
+
+export const extractPatchArtifacts = (
+	sessionName: string,
+	activities: ReadonlyArray<JulesActivity>,
+): JulesPatchArtifact[] => {
+	const patches = activities.flatMap((activity) =>
+		(activity.artifacts ?? []).flatMap((artifact) => {
+			if (!isChangeSetArtifact(artifact)) return [];
+
+			const patch = artifact.changeSet.gitPatch.unidiffPatch;
+
+			return [
+				{
+					activityName: activity.name,
+					createTime: activity.createTime,
+					patch,
+					suggestedCommitMessage:
+						artifact.changeSet.gitPatch.suggestedCommitMessage,
+				},
+			];
+		}),
+	);
+
+	if (patches.length === 0) {
+		throw new JulesMissingPatchArtifactError(sessionName);
+	}
+
+	return patches;
+};
+
+export const waitForJulesSession = async (
+	apiKey: string,
+	sessionName: string,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesSessionResponse> => {
+	const startedAt = Date.now();
+	let delayMs = INITIAL_POLL_DELAY_MS;
+
+	while (Date.now() - startedAt <= MAX_POLL_WAIT_MS) {
+		const session = await getJulesSession(apiKey, sessionName, deps);
+
+		if (session.state === "COMPLETED") {
+			return session;
+		}
+
+		if (session.state === "FAILED") {
+			const activities = await listAllJulesActivities(
+				apiKey,
+				sessionName,
+				deps,
+			).catch(() => []);
+			const reason = getSessionFailureReason(activities);
+			throw new JulesSessionStatusError(
+				sessionName,
+				"FAILED",
+				reason
+					? `Jules session ${sessionName} failed: ${reason}`
+					: `Jules session ${sessionName} failed.`,
+			);
+		}
+
+		await sleep(delayMs);
+		delayMs = Math.min(delayMs * 2, MAX_POLL_DELAY_MS);
+	}
+
+	throw new JulesSessionStatusError(
+		sessionName,
+		"TIMEOUT",
+		`Timed out waiting for Jules session ${sessionName} to complete.`,
+	);
+};
+
+export const summarizeJulesSession = async (
+	apiKey: string,
+	sessionName: string,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesSessionSummary> => {
+	const activities = await listAllJulesActivities(apiKey, sessionName, deps);
+	return {
+		activityCount: activities.length,
+		analysisMarkdown: extractAnalysisMarkdown(activities),
+	};
+};
+
 export const approveJulesPlan = async (
 	apiKey: string,
 	sessionName: string,
@@ -242,93 +593,6 @@ export const approveJulesPlan = async (
 	await handleResponse<void>(response);
 };
 
-/**
- * Sends a message to an existing Jules session and collects file artifacts.
- */
-export const sendJulesMessage = async (
-	apiKey: string,
-	sessionName: string,
-	prompt: string,
-	deps: JulesDependencies = defaultDependencies,
-): Promise<JulesFix[]> => {
-	const response = await deps.fetch(`${BASE_URL}/${sessionName}:sendMessage`, {
-		method: "POST",
-		headers: getHeaders(apiKey),
-		body: JSON.stringify({ prompt }),
-	});
-
-	await handleResponse<void>(response);
-
-	const activities = await listJulesActivities(apiKey, sessionName, 20, deps);
-	const fixes: JulesFix[] = [];
-
-	for (const activity of activities.activities) {
-		if (!activity.artifacts) continue;
-
-		for (const artifact of activity.artifacts) {
-			if (artifact.path && artifact.contents) {
-				fixes.push({
-					filePath: artifact.path as string,
-					fileContent: artifact.contents as string,
-				});
-			}
-		}
-	}
-
-	return fixes;
-};
-
-/**
- * Lists activities in a Jules session.
- */
-export const listJulesActivities = async (
-	apiKey: string,
-	sessionName: string,
-	pageSize: number = 30,
-	deps: JulesDependencies = defaultDependencies,
-): Promise<JulesActivitiesResponse> => {
-	const response = await deps.fetch(
-		`${BASE_URL}/${sessionName}/activities?pageSize=${pageSize}`,
-		{
-			headers: getHeaders(apiKey),
-		},
-	);
-	return handleResponse<JulesActivitiesResponse>(response);
-};
-
-export const summarizeJulesSession = async (
-	apiKey: string,
-	sessionName: string,
-	deps: JulesDependencies = defaultDependencies,
-): Promise<JulesSessionSummary> => {
-	const activities = await listJulesActivities(apiKey, sessionName, 20, deps);
-	const signals = new Set<string>();
-
-	for (const activity of activities.activities) {
-		if (activity.progressUpdated?.title) {
-			signals.add(activity.progressUpdated.title.trim());
-		}
-		if (activity.progressUpdated?.description) {
-			signals.add(activity.progressUpdated.description.trim());
-		}
-		if (activity.planGenerated?.plan.steps) {
-			for (const step of activity.planGenerated.plan.steps) {
-				signals.add(step.title.trim());
-			}
-		}
-	}
-
-	return {
-		activityCount: activities.activities.length,
-		signals: Array.from(signals)
-			.filter((entry) => entry.length > 0)
-			.slice(0, 5),
-	};
-};
-
-/**
- * Terminates a Jules session to free cloud resources.
- */
 export const deleteJulesSession = async (
 	apiKey: string,
 	sessionName: string,

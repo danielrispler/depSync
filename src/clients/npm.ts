@@ -1,3 +1,6 @@
+import semver from "semver";
+import type { PackageJson } from "../core/scanner/scanner.js";
+
 export type NpmRegistryResponse = {
 	name: string;
 	"dist-tags": {
@@ -16,52 +19,89 @@ const defaultNpmDependencies: NpmDependencies = {
 };
 
 /**
- * Fetches the latest version of a package from the public npm registry.
- * Uses native fetch avoiding extra dependencies.
+ * In-memory cache for registry lookups during the current run.
  */
-export const getLatestVersion = async (
-	packageName: string,
-	deps: NpmDependencies = defaultNpmDependencies,
-): Promise<string> => {
-	const url = `https://registry.npmjs.org/${packageName}`;
-	const response = await deps.fetch(url, {
-		headers: {
-			Accept: "application/vnd.npm.install-v1+json",
-		},
-	});
+let registryCache: Map<string, Promise<string>> = new Map<
+	string,
+	Promise<string>
+>();
 
-	if (!response.ok) {
-		throw new Error("Failed to fetch registry data for package");
-	}
-
-	const data = (await response.json()) as NpmRegistryResponse;
-	return data["dist-tags"].latest;
+/**
+ * Clears the registry cache. Used primarily for testing.
+ */
+export const clearRegistryCache = (): void => {
+	registryCache = new Map<string, Promise<string>>();
 };
 
 /**
- * Basic pure function check to determine if an update is needed.
- * It strictly ignores existing semver prefixes for safe, naive matching.
+ * Fetches the latest version of a package from the public npm registry.
+ * Uses an in-memory cache to prevent redundant network calls.
+ */
+export const getLatestVersion = (
+	packageName: string,
+	deps: NpmDependencies = defaultNpmDependencies,
+): Promise<string> => {
+	const cached = registryCache.get(packageName);
+	if (cached) return cached;
+
+	const promise = (async () => {
+		const url = `https://registry.npmjs.org/${packageName}`;
+		const response = await deps.fetch(url, {
+			headers: {
+				Accept: "application/vnd.npm.install-v1+json",
+			},
+		});
+
+		if (!response.ok) {
+			throw new Error(`Failed to fetch registry data for ${packageName}`);
+		}
+
+		const data = (await response.json()) as NpmRegistryResponse;
+		return data["dist-tags"].latest;
+	})();
+
+	registryCache.set(packageName, promise);
+	return promise;
+};
+
+/**
+ * Mathematical check to determine if an update is required.
+ * Uses the 'semver' package to handle ranges and prefixes accurately.
  */
 export const isUpdateNeeded = (
 	currentVersion: string,
 	latestVersion: string,
 ): boolean => {
-	const cleanCurrent = currentVersion.replace(/^[\^~]/, "");
-	return cleanCurrent !== latestVersion;
-};
+	try {
+		// Rule 1: Ignore Prereleases. depSync only analyzes stable releases.
+		if (semver.prerelease(latestVersion)) {
+			return false;
+		}
 
-import type { PackageJson } from "../core/scanner/scanner.js";
+		const c = semver.coerce(currentVersion);
+		const l = semver.coerce(latestVersion);
+
+		if (!c || !l) {
+			return currentVersion.replace(/^[\^~]/, "") !== latestVersion;
+		}
+
+		// Rule 2: Respect the Range. If the latest version safely satisfies the
+		// existing range, we don't treat it as a drift.
+		if (semver.satisfies(latestVersion, currentVersion)) {
+			return false;
+		}
+
+		// Only flag a drift if the latest stable version is strictly newer
+		// and falls OUTSIDE the current range.
+		return semver.gt(l, c);
+	} catch {
+		return currentVersion.replace(/^[\^~]/, "") !== latestVersion;
+	}
+};
 
 /**
  * Validates whether a version string is a standard semver range that
  * can be resolved by the public npm registry.
- *
- * Excludes package manager specific protocols like:
- * - workspace:*   (pnpm internal linking)
- * - catalog:      (pnpm multi-workspace version sharing)
- * - npm:          (npm aliases)
- * - file:         (local filesystem paths)
- * - git+          (git repository links)
  */
 export const isPublicRegistryVersion = (version: string): boolean => {
 	if (!version) return false;
@@ -83,17 +123,12 @@ export const isPublicRegistryVersion = (version: string): boolean => {
  * dependency names that represent external, public-registry packages.
  */
 export const getExternalDependencies = (pkg: PackageJson): string[] => {
-	const externalDeps: string[] = [];
 	const allDeps = {
 		...(pkg.dependencies || {}),
 		...(pkg.devDependencies || {}),
 	};
 
-	for (const [name, version] of Object.entries(allDeps)) {
-		if (isPublicRegistryVersion(version)) {
-			externalDeps.push(name);
-		}
-	}
-
-	return externalDeps;
+	return Object.entries(allDeps)
+		.filter(([_, version]) => isPublicRegistryVersion(version))
+		.map(([name]) => name);
 };

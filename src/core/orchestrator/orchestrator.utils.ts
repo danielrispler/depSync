@@ -1,5 +1,5 @@
 import { dirname } from "node:path";
-
+import semver from "semver";
 import { getExternalDependencies } from "../../clients/npm.js";
 import {
 	type AffectedPackagePointer,
@@ -28,8 +28,6 @@ const getSemverWeight = (updateType: UpdateType): number => {
 
 /**
  * Calculates a priority weight where higher is higher priority.
- * The framework bonus is intentionally smaller than the semver step so
- * framework minors never outrank non-framework majors.
  */
 export const calculateDriftWeight = (
 	packageName: string,
@@ -128,15 +126,28 @@ export const buildPackagePayload = (
 };
 
 /**
- * Simple semver-ish update type detector.
+ * Detects the update type (MAJOR, MINOR, PATCH) using the semver package.
  */
 export const getUpdateType = (current: string, latest: string): UpdateType => {
-	const c = current.replace(/^[\^~]/, "").split(".");
-	const l = latest.split(".");
+	try {
+		const c = semver.coerce(current);
+		const l = semver.coerce(latest);
 
-	if (c[0] !== l[0]) return UpdateType.MAJOR;
-	if (c[1] !== l[1]) return UpdateType.MINOR;
-	return UpdateType.PATCH;
+		if (!c || !l) return UpdateType.PATCH;
+
+		const diff = semver.diff(c, l);
+
+		switch (diff) {
+			case "major":
+				return UpdateType.MAJOR;
+			case "minor":
+				return UpdateType.MINOR;
+			default:
+				return UpdateType.PATCH;
+		}
+	} catch {
+		return UpdateType.PATCH;
+	}
 };
 
 export const calculateRiskLevel = (

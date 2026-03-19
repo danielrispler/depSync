@@ -4,7 +4,9 @@ import { reportDriftAsIssue } from "../clients/github.js";
 import {
 	createJulesAnalysisSession,
 	deleteJulesSession,
+	resolveJulesSource,
 	summarizeJulesSession,
+	waitForJulesSession,
 } from "../clients/jules.js";
 import { sendNotification } from "../clients/notifier.js";
 import { analyzeMonorepoDrift } from "../core/orchestrator/orchestrator.js";
@@ -26,36 +28,43 @@ const summarizeReleaseNotes = (releaseNotes: string | null): string | null => {
 	return candidate ? candidate.slice(0, 180) : null;
 };
 
-const buildIssueAnalysis = async (
-	julesApiKey: string,
-	sessionName: string,
-	drift: AggregatedDrift,
-): Promise<DepSyncIssueAnalysis> => {
-	const sessionSummary = await summarizeJulesSession(
-		julesApiKey,
-		sessionName,
-	).catch((error) => {
-		const message = error instanceof Error ? error.message : String(error);
-		core.warning(
-			`Could not summarize Jules session ${sessionName}: ${message}`,
-		);
-		return { activityCount: 0, signals: [] };
-	});
-
+const buildFallbackAnalysisMarkdown = (drift: AggregatedDrift): string => {
+	const releaseNotesSummary = summarizeReleaseNotes(drift.releaseNotes);
 	const riskLevel = calculateRiskLevel(
 		drift.updateType,
 		drift.affectedPackages.length,
 		drift.usageCount,
 	);
-	const releaseNotesSummary = summarizeReleaseNotes(drift.releaseNotes);
-	const issueSummary = `${drift.dependencyName} affects ${drift.affectedPackages.length} package(s) across ${drift.affectedSourceFiles.length} file(s) with ${riskLevel} migration risk.`;
-	const julesSignals = sessionSummary.signals.length
-		? sessionSummary.signals.map((signal) => `- ${signal}`).join("\n")
-		: "- Jules returned no structured progress text for this short-lived session.";
 
 	const releaseNotesSection = releaseNotesSummary
 		? `### Release Notes Signal\n- ${releaseNotesSummary}`
 		: `### Release Notes Signal\n- No release notes were available for \`${drift.latestVersion}\`.`;
+
+	return `### Summary
+${drift.dependencyName} affects ${drift.affectedPackages.length} package(s) across ${drift.affectedSourceFiles.length} file(s).
+
+### Risk
+- This update is classified as **${riskLevel}** risk based on semver impact and AST footprint.
+- depSync found ${drift.usageCount} relevant usage site(s) across ${drift.affectedSourceFiles.length} focused file(s).
+
+${releaseNotesSection}
+
+### Recommended Migration Focus
+- Start with the affected files already captured in this issue context.
+- Validate exported APIs before merging if any downstream signature changes are required.`;
+};
+
+const buildIssueAnalysis = (
+	drift: AggregatedDrift,
+	analysisMarkdown: string | null,
+	activityCount: number,
+): DepSyncIssueAnalysis => {
+	const riskLevel = calculateRiskLevel(
+		drift.updateType,
+		drift.affectedPackages.length,
+		drift.usageCount,
+	);
+	const issueSummary = `${drift.dependencyName} affects ${drift.affectedPackages.length} package(s) across ${drift.affectedSourceFiles.length} file(s) with ${riskLevel} migration risk.`;
 
 	return {
 		riskLevel,
@@ -64,24 +73,62 @@ const buildIssueAnalysis = async (
 			generatedAt: new Date().toISOString(),
 			affectedFileCount: drift.affectedSourceFiles.length,
 			affectedPackageCount: drift.affectedPackages.length,
-			julesActivityCount: sessionSummary.activityCount,
+			julesActivityCount: activityCount,
 		},
-		markdown: `### Summary
-${issueSummary}
-
-### Risk
-- This update is classified as **${riskLevel}** risk based on semver impact and AST footprint.
-- depSync found ${drift.usageCount} relevant usage site(s) across ${drift.affectedSourceFiles.length} focused file(s).
-
-${releaseNotesSection}
-
-### Jules Signals
-${julesSignals}
-
-### Recommended Migration Focus
-- Start with the affected files already captured in this issue context.
-- Validate exported APIs before merging if any downstream signature changes are required.`,
+		markdown: analysisMarkdown ?? buildFallbackAnalysisMarkdown(drift),
 	};
+};
+
+const processDrift = async (
+	githubToken: string,
+	julesApiKey: string,
+	drift: AggregatedDrift,
+	source: Awaited<ReturnType<typeof resolveJulesSource>>,
+): Promise<NotificationDigestItem> => {
+	let sessionName: string | undefined;
+
+	try {
+		core.info(
+			`🤖 Opening Jules analysis session for ${drift.dependencyName}...`,
+		);
+		const session = await createJulesAnalysisSession(
+			julesApiKey,
+			source,
+			drift,
+		);
+		sessionName = session.name;
+
+		await waitForJulesSession(julesApiKey, session.name);
+		const sessionSummary = await summarizeJulesSession(
+			julesApiKey,
+			session.name,
+		);
+		const analysis = buildIssueAnalysis(
+			drift,
+			sessionSummary.analysisMarkdown,
+			sessionSummary.activityCount,
+		);
+
+		core.info(`📅 Opening GitHub issue for ${drift.dependencyName}...`);
+		const issue = await reportDriftAsIssue(githubToken, drift, analysis);
+
+		core.info(`✔ Successfully processed ${drift.dependencyName}.`);
+		return {
+			packageName: drift.dependencyName,
+			riskLevel: analysis.riskLevel,
+			issueUrl: issue.url,
+			summary: analysis.issueSummary,
+		};
+	} finally {
+		if (sessionName) {
+			await deleteJulesSession(julesApiKey, sessionName).catch((error) => {
+				const message = error instanceof Error ? error.message : String(error);
+				core.warning(
+					`Failed to clean up Jules session ${sessionName}: ${message}`,
+				);
+			});
+		}
+	}
 };
 
 export const handleScanWorkflow = async (
@@ -106,54 +153,26 @@ export const handleScanWorkflow = async (
 
 	core.info(`🔍 Found ${drifts.length} prioritized dependency drifts.`);
 	const { owner, repo } = github.context.repo;
+	const source = await resolveJulesSource(julesApiKey, owner, repo);
+
+	const settledResults = await Promise.allSettled(
+		drifts.map((drift) =>
+			processDrift(githubToken, julesApiKey, drift, source),
+		),
+	);
+
 	const notificationDigest: NotificationDigestItem[] = [];
-
-	for (const drift of drifts) {
-		let sessionName: string | undefined;
-
-		try {
-			core.info(
-				`🤖 Opening Jules analysis session for ${drift.dependencyName}...`,
-			);
-			const session = await createJulesAnalysisSession(
-				julesApiKey,
-				owner,
-				repo,
-				drift,
-			);
-			sessionName = session.name;
-
-			const analysis = await buildIssueAnalysis(
-				julesApiKey,
-				session.name,
-				drift,
-			);
-
-			core.info(`📅 Opening GitHub issue for ${drift.dependencyName}...`);
-			const issue = await reportDriftAsIssue(githubToken, drift, analysis);
-
-			notificationDigest.push({
-				packageName: drift.dependencyName,
-				riskLevel: analysis.riskLevel,
-				issueUrl: issue.url,
-				summary: analysis.issueSummary,
-			});
-
-			core.info(`✔ Successfully processed ${drift.dependencyName}.`);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			core.error(`❌ Failed processing ${drift.dependencyName}: ${message}`);
-		} finally {
-			if (sessionName) {
-				await deleteJulesSession(julesApiKey, sessionName).catch((error) => {
-					const message =
-						error instanceof Error ? error.message : String(error);
-					core.warning(
-						`Failed to clean up Jules session ${sessionName}: ${message}`,
-					);
-				});
-			}
+	for (const result of settledResults) {
+		if (result.status === "fulfilled") {
+			notificationDigest.push(result.value);
+			continue;
 		}
+
+		const message =
+			result.reason instanceof Error
+				? result.reason.message
+				: String(result.reason);
+		core.error(`❌ Failed processing drift worker: ${message}`);
 	}
 
 	await sendNotification(notificationWebhookUrl, notificationWebhookSecret, {

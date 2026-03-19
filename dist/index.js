@@ -2156,7 +2156,7 @@ exports.hashFiles = hashFiles;
 
 /***/ }),
 
-/***/ 8691:
+/***/ 1072:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
@@ -2274,7 +2274,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DefaultGlobber = void 0;
 const core = __importStar(__nccwpck_require__(6966));
 const fs = __importStar(__nccwpck_require__(9896));
-const globOptionsHelper = __importStar(__nccwpck_require__(8691));
+const globOptionsHelper = __importStar(__nccwpck_require__(1072));
 const path = __importStar(__nccwpck_require__(6928));
 const patternHelper = __importStar(__nccwpck_require__(9386));
 const internal_match_kind_1 = __nccwpck_require__(7933);
@@ -213904,6 +213904,2721 @@ exports.basename = (path, { windows } = {}) => {
 
 /***/ }),
 
+/***/ 6222:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const ANY = Symbol('SemVer ANY')
+// hoisted class for cyclic dependency
+class Comparator {
+  static get ANY () {
+    return ANY
+  }
+
+  constructor (comp, options) {
+    options = parseOptions(options)
+
+    if (comp instanceof Comparator) {
+      if (comp.loose === !!options.loose) {
+        return comp
+      } else {
+        comp = comp.value
+      }
+    }
+
+    comp = comp.trim().split(/\s+/).join(' ')
+    debug('comparator', comp, options)
+    this.options = options
+    this.loose = !!options.loose
+    this.parse(comp)
+
+    if (this.semver === ANY) {
+      this.value = ''
+    } else {
+      this.value = this.operator + this.semver.version
+    }
+
+    debug('comp', this)
+  }
+
+  parse (comp) {
+    const r = this.options.loose ? re[t.COMPARATORLOOSE] : re[t.COMPARATOR]
+    const m = comp.match(r)
+
+    if (!m) {
+      throw new TypeError(`Invalid comparator: ${comp}`)
+    }
+
+    this.operator = m[1] !== undefined ? m[1] : ''
+    if (this.operator === '=') {
+      this.operator = ''
+    }
+
+    // if it literally is just '>' or '' then allow anything.
+    if (!m[2]) {
+      this.semver = ANY
+    } else {
+      this.semver = new SemVer(m[2], this.options.loose)
+    }
+  }
+
+  toString () {
+    return this.value
+  }
+
+  test (version) {
+    debug('Comparator.test', version, this.options.loose)
+
+    if (this.semver === ANY || version === ANY) {
+      return true
+    }
+
+    if (typeof version === 'string') {
+      try {
+        version = new SemVer(version, this.options)
+      } catch (er) {
+        return false
+      }
+    }
+
+    return cmp(version, this.operator, this.semver, this.options)
+  }
+
+  intersects (comp, options) {
+    if (!(comp instanceof Comparator)) {
+      throw new TypeError('a Comparator is required')
+    }
+
+    if (this.operator === '') {
+      if (this.value === '') {
+        return true
+      }
+      return new Range(comp.value, options).test(this.value)
+    } else if (comp.operator === '') {
+      if (comp.value === '') {
+        return true
+      }
+      return new Range(this.value, options).test(comp.semver)
+    }
+
+    options = parseOptions(options)
+
+    // Special cases where nothing can possibly be lower
+    if (options.includePrerelease &&
+      (this.value === '<0.0.0-0' || comp.value === '<0.0.0-0')) {
+      return false
+    }
+    if (!options.includePrerelease &&
+      (this.value.startsWith('<0.0.0') || comp.value.startsWith('<0.0.0'))) {
+      return false
+    }
+
+    // Same direction increasing (> or >=)
+    if (this.operator.startsWith('>') && comp.operator.startsWith('>')) {
+      return true
+    }
+    // Same direction decreasing (< or <=)
+    if (this.operator.startsWith('<') && comp.operator.startsWith('<')) {
+      return true
+    }
+    // same SemVer and both sides are inclusive (<= or >=)
+    if (
+      (this.semver.version === comp.semver.version) &&
+      this.operator.includes('=') && comp.operator.includes('=')) {
+      return true
+    }
+    // opposite directions less than
+    if (cmp(this.semver, '<', comp.semver, options) &&
+      this.operator.startsWith('>') && comp.operator.startsWith('<')) {
+      return true
+    }
+    // opposite directions greater than
+    if (cmp(this.semver, '>', comp.semver, options) &&
+      this.operator.startsWith('<') && comp.operator.startsWith('>')) {
+      return true
+    }
+    return false
+  }
+}
+
+module.exports = Comparator
+
+const parseOptions = __nccwpck_require__(977)
+const { safeRe: re, t } = __nccwpck_require__(5580)
+const cmp = __nccwpck_require__(2977)
+const debug = __nccwpck_require__(1542)
+const SemVer = __nccwpck_require__(4154)
+const Range = __nccwpck_require__(5518)
+
+
+/***/ }),
+
+/***/ 5518:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SPACE_CHARACTERS = /\s+/g
+
+// hoisted class for cyclic dependency
+class Range {
+  constructor (range, options) {
+    options = parseOptions(options)
+
+    if (range instanceof Range) {
+      if (
+        range.loose === !!options.loose &&
+        range.includePrerelease === !!options.includePrerelease
+      ) {
+        return range
+      } else {
+        return new Range(range.raw, options)
+      }
+    }
+
+    if (range instanceof Comparator) {
+      // just put it in the set and return
+      this.raw = range.value
+      this.set = [[range]]
+      this.formatted = undefined
+      return this
+    }
+
+    this.options = options
+    this.loose = !!options.loose
+    this.includePrerelease = !!options.includePrerelease
+
+    // First reduce all whitespace as much as possible so we do not have to rely
+    // on potentially slow regexes like \s*. This is then stored and used for
+    // future error messages as well.
+    this.raw = range.trim().replace(SPACE_CHARACTERS, ' ')
+
+    // First, split on ||
+    this.set = this.raw
+      .split('||')
+      // map the range to a 2d array of comparators
+      .map(r => this.parseRange(r.trim()))
+      // throw out any comparator lists that are empty
+      // this generally means that it was not a valid range, which is allowed
+      // in loose mode, but will still throw if the WHOLE range is invalid.
+      .filter(c => c.length)
+
+    if (!this.set.length) {
+      throw new TypeError(`Invalid SemVer Range: ${this.raw}`)
+    }
+
+    // if we have any that are not the null set, throw out null sets.
+    if (this.set.length > 1) {
+      // keep the first one, in case they're all null sets
+      const first = this.set[0]
+      this.set = this.set.filter(c => !isNullSet(c[0]))
+      if (this.set.length === 0) {
+        this.set = [first]
+      } else if (this.set.length > 1) {
+        // if we have any that are *, then the range is just *
+        for (const c of this.set) {
+          if (c.length === 1 && isAny(c[0])) {
+            this.set = [c]
+            break
+          }
+        }
+      }
+    }
+
+    this.formatted = undefined
+  }
+
+  get range () {
+    if (this.formatted === undefined) {
+      this.formatted = ''
+      for (let i = 0; i < this.set.length; i++) {
+        if (i > 0) {
+          this.formatted += '||'
+        }
+        const comps = this.set[i]
+        for (let k = 0; k < comps.length; k++) {
+          if (k > 0) {
+            this.formatted += ' '
+          }
+          this.formatted += comps[k].toString().trim()
+        }
+      }
+    }
+    return this.formatted
+  }
+
+  format () {
+    return this.range
+  }
+
+  toString () {
+    return this.range
+  }
+
+  parseRange (range) {
+    // memoize range parsing for performance.
+    // this is a very hot path, and fully deterministic.
+    const memoOpts =
+      (this.options.includePrerelease && FLAG_INCLUDE_PRERELEASE) |
+      (this.options.loose && FLAG_LOOSE)
+    const memoKey = memoOpts + ':' + range
+    const cached = cache.get(memoKey)
+    if (cached) {
+      return cached
+    }
+
+    const loose = this.options.loose
+    // `1.2.3 - 1.2.4` => `>=1.2.3 <=1.2.4`
+    const hr = loose ? re[t.HYPHENRANGELOOSE] : re[t.HYPHENRANGE]
+    range = range.replace(hr, hyphenReplace(this.options.includePrerelease))
+    debug('hyphen replace', range)
+
+    // `> 1.2.3 < 1.2.5` => `>1.2.3 <1.2.5`
+    range = range.replace(re[t.COMPARATORTRIM], comparatorTrimReplace)
+    debug('comparator trim', range)
+
+    // `~ 1.2.3` => `~1.2.3`
+    range = range.replace(re[t.TILDETRIM], tildeTrimReplace)
+    debug('tilde trim', range)
+
+    // `^ 1.2.3` => `^1.2.3`
+    range = range.replace(re[t.CARETTRIM], caretTrimReplace)
+    debug('caret trim', range)
+
+    // At this point, the range is completely trimmed and
+    // ready to be split into comparators.
+
+    let rangeList = range
+      .split(' ')
+      .map(comp => parseComparator(comp, this.options))
+      .join(' ')
+      .split(/\s+/)
+      // >=0.0.0 is equivalent to *
+      .map(comp => replaceGTE0(comp, this.options))
+
+    if (loose) {
+      // in loose mode, throw out any that are not valid comparators
+      rangeList = rangeList.filter(comp => {
+        debug('loose invalid filter', comp, this.options)
+        return !!comp.match(re[t.COMPARATORLOOSE])
+      })
+    }
+    debug('range list', rangeList)
+
+    // if any comparators are the null set, then replace with JUST null set
+    // if more than one comparator, remove any * comparators
+    // also, don't include the same comparator more than once
+    const rangeMap = new Map()
+    const comparators = rangeList.map(comp => new Comparator(comp, this.options))
+    for (const comp of comparators) {
+      if (isNullSet(comp)) {
+        return [comp]
+      }
+      rangeMap.set(comp.value, comp)
+    }
+    if (rangeMap.size > 1 && rangeMap.has('')) {
+      rangeMap.delete('')
+    }
+
+    const result = [...rangeMap.values()]
+    cache.set(memoKey, result)
+    return result
+  }
+
+  intersects (range, options) {
+    if (!(range instanceof Range)) {
+      throw new TypeError('a Range is required')
+    }
+
+    return this.set.some((thisComparators) => {
+      return (
+        isSatisfiable(thisComparators, options) &&
+        range.set.some((rangeComparators) => {
+          return (
+            isSatisfiable(rangeComparators, options) &&
+            thisComparators.every((thisComparator) => {
+              return rangeComparators.every((rangeComparator) => {
+                return thisComparator.intersects(rangeComparator, options)
+              })
+            })
+          )
+        })
+      )
+    })
+  }
+
+  // if ANY of the sets match ALL of its comparators, then pass
+  test (version) {
+    if (!version) {
+      return false
+    }
+
+    if (typeof version === 'string') {
+      try {
+        version = new SemVer(version, this.options)
+      } catch (er) {
+        return false
+      }
+    }
+
+    for (let i = 0; i < this.set.length; i++) {
+      if (testSet(this.set[i], version, this.options)) {
+        return true
+      }
+    }
+    return false
+  }
+}
+
+module.exports = Range
+
+const LRU = __nccwpck_require__(5088)
+const cache = new LRU()
+
+const parseOptions = __nccwpck_require__(977)
+const Comparator = __nccwpck_require__(6222)
+const debug = __nccwpck_require__(1542)
+const SemVer = __nccwpck_require__(4154)
+const {
+  safeRe: re,
+  t,
+  comparatorTrimReplace,
+  tildeTrimReplace,
+  caretTrimReplace,
+} = __nccwpck_require__(5580)
+const { FLAG_INCLUDE_PRERELEASE, FLAG_LOOSE } = __nccwpck_require__(4256)
+
+const isNullSet = c => c.value === '<0.0.0-0'
+const isAny = c => c.value === ''
+
+// take a set of comparators and determine whether there
+// exists a version which can satisfy it
+const isSatisfiable = (comparators, options) => {
+  let result = true
+  const remainingComparators = comparators.slice()
+  let testComparator = remainingComparators.pop()
+
+  while (result && remainingComparators.length) {
+    result = remainingComparators.every((otherComparator) => {
+      return testComparator.intersects(otherComparator, options)
+    })
+
+    testComparator = remainingComparators.pop()
+  }
+
+  return result
+}
+
+// comprised of xranges, tildes, stars, and gtlt's at this point.
+// already replaced the hyphen ranges
+// turn into a set of JUST comparators.
+const parseComparator = (comp, options) => {
+  comp = comp.replace(re[t.BUILD], '')
+  debug('comp', comp, options)
+  comp = replaceCarets(comp, options)
+  debug('caret', comp)
+  comp = replaceTildes(comp, options)
+  debug('tildes', comp)
+  comp = replaceXRanges(comp, options)
+  debug('xrange', comp)
+  comp = replaceStars(comp, options)
+  debug('stars', comp)
+  return comp
+}
+
+const isX = id => !id || id.toLowerCase() === 'x' || id === '*'
+
+// ~, ~> --> * (any, kinda silly)
+// ~2, ~2.x, ~2.x.x, ~>2, ~>2.x ~>2.x.x --> >=2.0.0 <3.0.0-0
+// ~2.0, ~2.0.x, ~>2.0, ~>2.0.x --> >=2.0.0 <2.1.0-0
+// ~1.2, ~1.2.x, ~>1.2, ~>1.2.x --> >=1.2.0 <1.3.0-0
+// ~1.2.3, ~>1.2.3 --> >=1.2.3 <1.3.0-0
+// ~1.2.0, ~>1.2.0 --> >=1.2.0 <1.3.0-0
+// ~0.0.1 --> >=0.0.1 <0.1.0-0
+const replaceTildes = (comp, options) => {
+  return comp
+    .trim()
+    .split(/\s+/)
+    .map((c) => replaceTilde(c, options))
+    .join(' ')
+}
+
+const replaceTilde = (comp, options) => {
+  const r = options.loose ? re[t.TILDELOOSE] : re[t.TILDE]
+  return comp.replace(r, (_, M, m, p, pr) => {
+    debug('tilde', comp, _, M, m, p, pr)
+    let ret
+
+    if (isX(M)) {
+      ret = ''
+    } else if (isX(m)) {
+      ret = `>=${M}.0.0 <${+M + 1}.0.0-0`
+    } else if (isX(p)) {
+      // ~1.2 == >=1.2.0 <1.3.0-0
+      ret = `>=${M}.${m}.0 <${M}.${+m + 1}.0-0`
+    } else if (pr) {
+      debug('replaceTilde pr', pr)
+      ret = `>=${M}.${m}.${p}-${pr
+      } <${M}.${+m + 1}.0-0`
+    } else {
+      // ~1.2.3 == >=1.2.3 <1.3.0-0
+      ret = `>=${M}.${m}.${p
+      } <${M}.${+m + 1}.0-0`
+    }
+
+    debug('tilde return', ret)
+    return ret
+  })
+}
+
+// ^ --> * (any, kinda silly)
+// ^2, ^2.x, ^2.x.x --> >=2.0.0 <3.0.0-0
+// ^2.0, ^2.0.x --> >=2.0.0 <3.0.0-0
+// ^1.2, ^1.2.x --> >=1.2.0 <2.0.0-0
+// ^1.2.3 --> >=1.2.3 <2.0.0-0
+// ^1.2.0 --> >=1.2.0 <2.0.0-0
+// ^0.0.1 --> >=0.0.1 <0.0.2-0
+// ^0.1.0 --> >=0.1.0 <0.2.0-0
+const replaceCarets = (comp, options) => {
+  return comp
+    .trim()
+    .split(/\s+/)
+    .map((c) => replaceCaret(c, options))
+    .join(' ')
+}
+
+const replaceCaret = (comp, options) => {
+  debug('caret', comp, options)
+  const r = options.loose ? re[t.CARETLOOSE] : re[t.CARET]
+  const z = options.includePrerelease ? '-0' : ''
+  return comp.replace(r, (_, M, m, p, pr) => {
+    debug('caret', comp, _, M, m, p, pr)
+    let ret
+
+    if (isX(M)) {
+      ret = ''
+    } else if (isX(m)) {
+      ret = `>=${M}.0.0${z} <${+M + 1}.0.0-0`
+    } else if (isX(p)) {
+      if (M === '0') {
+        ret = `>=${M}.${m}.0${z} <${M}.${+m + 1}.0-0`
+      } else {
+        ret = `>=${M}.${m}.0${z} <${+M + 1}.0.0-0`
+      }
+    } else if (pr) {
+      debug('replaceCaret pr', pr)
+      if (M === '0') {
+        if (m === '0') {
+          ret = `>=${M}.${m}.${p}-${pr
+          } <${M}.${m}.${+p + 1}-0`
+        } else {
+          ret = `>=${M}.${m}.${p}-${pr
+          } <${M}.${+m + 1}.0-0`
+        }
+      } else {
+        ret = `>=${M}.${m}.${p}-${pr
+        } <${+M + 1}.0.0-0`
+      }
+    } else {
+      debug('no pr')
+      if (M === '0') {
+        if (m === '0') {
+          ret = `>=${M}.${m}.${p
+          }${z} <${M}.${m}.${+p + 1}-0`
+        } else {
+          ret = `>=${M}.${m}.${p
+          }${z} <${M}.${+m + 1}.0-0`
+        }
+      } else {
+        ret = `>=${M}.${m}.${p
+        } <${+M + 1}.0.0-0`
+      }
+    }
+
+    debug('caret return', ret)
+    return ret
+  })
+}
+
+const replaceXRanges = (comp, options) => {
+  debug('replaceXRanges', comp, options)
+  return comp
+    .split(/\s+/)
+    .map((c) => replaceXRange(c, options))
+    .join(' ')
+}
+
+const replaceXRange = (comp, options) => {
+  comp = comp.trim()
+  const r = options.loose ? re[t.XRANGELOOSE] : re[t.XRANGE]
+  return comp.replace(r, (ret, gtlt, M, m, p, pr) => {
+    debug('xRange', comp, ret, gtlt, M, m, p, pr)
+    const xM = isX(M)
+    const xm = xM || isX(m)
+    const xp = xm || isX(p)
+    const anyX = xp
+
+    if (gtlt === '=' && anyX) {
+      gtlt = ''
+    }
+
+    // if we're including prereleases in the match, then we need
+    // to fix this to -0, the lowest possible prerelease value
+    pr = options.includePrerelease ? '-0' : ''
+
+    if (xM) {
+      if (gtlt === '>' || gtlt === '<') {
+        // nothing is allowed
+        ret = '<0.0.0-0'
+      } else {
+        // nothing is forbidden
+        ret = '*'
+      }
+    } else if (gtlt && anyX) {
+      // we know patch is an x, because we have any x at all.
+      // replace X with 0
+      if (xm) {
+        m = 0
+      }
+      p = 0
+
+      if (gtlt === '>') {
+        // >1 => >=2.0.0
+        // >1.2 => >=1.3.0
+        gtlt = '>='
+        if (xm) {
+          M = +M + 1
+          m = 0
+          p = 0
+        } else {
+          m = +m + 1
+          p = 0
+        }
+      } else if (gtlt === '<=') {
+        // <=0.7.x is actually <0.8.0, since any 0.7.x should
+        // pass.  Similarly, <=7.x is actually <8.0.0, etc.
+        gtlt = '<'
+        if (xm) {
+          M = +M + 1
+        } else {
+          m = +m + 1
+        }
+      }
+
+      if (gtlt === '<') {
+        pr = '-0'
+      }
+
+      ret = `${gtlt + M}.${m}.${p}${pr}`
+    } else if (xm) {
+      ret = `>=${M}.0.0${pr} <${+M + 1}.0.0-0`
+    } else if (xp) {
+      ret = `>=${M}.${m}.0${pr
+      } <${M}.${+m + 1}.0-0`
+    }
+
+    debug('xRange return', ret)
+
+    return ret
+  })
+}
+
+// Because * is AND-ed with everything else in the comparator,
+// and '' means "any version", just remove the *s entirely.
+const replaceStars = (comp, options) => {
+  debug('replaceStars', comp, options)
+  // Looseness is ignored here.  star is always as loose as it gets!
+  return comp
+    .trim()
+    .replace(re[t.STAR], '')
+}
+
+const replaceGTE0 = (comp, options) => {
+  debug('replaceGTE0', comp, options)
+  return comp
+    .trim()
+    .replace(re[options.includePrerelease ? t.GTE0PRE : t.GTE0], '')
+}
+
+// This function is passed to string.replace(re[t.HYPHENRANGE])
+// M, m, patch, prerelease, build
+// 1.2 - 3.4.5 => >=1.2.0 <=3.4.5
+// 1.2.3 - 3.4 => >=1.2.0 <3.5.0-0 Any 3.4.x will do
+// 1.2 - 3.4 => >=1.2.0 <3.5.0-0
+// TODO build?
+const hyphenReplace = incPr => ($0,
+  from, fM, fm, fp, fpr, fb,
+  to, tM, tm, tp, tpr) => {
+  if (isX(fM)) {
+    from = ''
+  } else if (isX(fm)) {
+    from = `>=${fM}.0.0${incPr ? '-0' : ''}`
+  } else if (isX(fp)) {
+    from = `>=${fM}.${fm}.0${incPr ? '-0' : ''}`
+  } else if (fpr) {
+    from = `>=${from}`
+  } else {
+    from = `>=${from}${incPr ? '-0' : ''}`
+  }
+
+  if (isX(tM)) {
+    to = ''
+  } else if (isX(tm)) {
+    to = `<${+tM + 1}.0.0-0`
+  } else if (isX(tp)) {
+    to = `<${tM}.${+tm + 1}.0-0`
+  } else if (tpr) {
+    to = `<=${tM}.${tm}.${tp}-${tpr}`
+  } else if (incPr) {
+    to = `<${tM}.${tm}.${+tp + 1}-0`
+  } else {
+    to = `<=${to}`
+  }
+
+  return `${from} ${to}`.trim()
+}
+
+const testSet = (set, version, options) => {
+  for (let i = 0; i < set.length; i++) {
+    if (!set[i].test(version)) {
+      return false
+    }
+  }
+
+  if (version.prerelease.length && !options.includePrerelease) {
+    // Find the set of versions that are allowed to have prereleases
+    // For example, ^1.2.3-pr.1 desugars to >=1.2.3-pr.1 <2.0.0
+    // That should allow `1.2.3-pr.2` to pass.
+    // However, `1.2.4-alpha.notready` should NOT be allowed,
+    // even though it's within the range set by the comparators.
+    for (let i = 0; i < set.length; i++) {
+      debug(set[i].semver)
+      if (set[i].semver === Comparator.ANY) {
+        continue
+      }
+
+      if (set[i].semver.prerelease.length > 0) {
+        const allowed = set[i].semver
+        if (allowed.major === version.major &&
+            allowed.minor === version.minor &&
+            allowed.patch === version.patch) {
+          return true
+        }
+      }
+    }
+
+    // Version has a -pre, but it's not one of the ones we like.
+    return false
+  }
+
+  return true
+}
+
+
+/***/ }),
+
+/***/ 4154:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const debug = __nccwpck_require__(1542)
+const { MAX_LENGTH, MAX_SAFE_INTEGER } = __nccwpck_require__(4256)
+const { safeRe: re, t } = __nccwpck_require__(5580)
+
+const parseOptions = __nccwpck_require__(977)
+const { compareIdentifiers } = __nccwpck_require__(1713)
+class SemVer {
+  constructor (version, options) {
+    options = parseOptions(options)
+
+    if (version instanceof SemVer) {
+      if (version.loose === !!options.loose &&
+        version.includePrerelease === !!options.includePrerelease) {
+        return version
+      } else {
+        version = version.version
+      }
+    } else if (typeof version !== 'string') {
+      throw new TypeError(`Invalid version. Must be a string. Got type "${typeof version}".`)
+    }
+
+    if (version.length > MAX_LENGTH) {
+      throw new TypeError(
+        `version is longer than ${MAX_LENGTH} characters`
+      )
+    }
+
+    debug('SemVer', version, options)
+    this.options = options
+    this.loose = !!options.loose
+    // this isn't actually relevant for versions, but keep it so that we
+    // don't run into trouble passing this.options around.
+    this.includePrerelease = !!options.includePrerelease
+
+    const m = version.trim().match(options.loose ? re[t.LOOSE] : re[t.FULL])
+
+    if (!m) {
+      throw new TypeError(`Invalid Version: ${version}`)
+    }
+
+    this.raw = version
+
+    // these are actually numbers
+    this.major = +m[1]
+    this.minor = +m[2]
+    this.patch = +m[3]
+
+    if (this.major > MAX_SAFE_INTEGER || this.major < 0) {
+      throw new TypeError('Invalid major version')
+    }
+
+    if (this.minor > MAX_SAFE_INTEGER || this.minor < 0) {
+      throw new TypeError('Invalid minor version')
+    }
+
+    if (this.patch > MAX_SAFE_INTEGER || this.patch < 0) {
+      throw new TypeError('Invalid patch version')
+    }
+
+    // numberify any prerelease numeric ids
+    if (!m[4]) {
+      this.prerelease = []
+    } else {
+      this.prerelease = m[4].split('.').map((id) => {
+        if (/^[0-9]+$/.test(id)) {
+          const num = +id
+          if (num >= 0 && num < MAX_SAFE_INTEGER) {
+            return num
+          }
+        }
+        return id
+      })
+    }
+
+    this.build = m[5] ? m[5].split('.') : []
+    this.format()
+  }
+
+  format () {
+    this.version = `${this.major}.${this.minor}.${this.patch}`
+    if (this.prerelease.length) {
+      this.version += `-${this.prerelease.join('.')}`
+    }
+    return this.version
+  }
+
+  toString () {
+    return this.version
+  }
+
+  compare (other) {
+    debug('SemVer.compare', this.version, this.options, other)
+    if (!(other instanceof SemVer)) {
+      if (typeof other === 'string' && other === this.version) {
+        return 0
+      }
+      other = new SemVer(other, this.options)
+    }
+
+    if (other.version === this.version) {
+      return 0
+    }
+
+    return this.compareMain(other) || this.comparePre(other)
+  }
+
+  compareMain (other) {
+    if (!(other instanceof SemVer)) {
+      other = new SemVer(other, this.options)
+    }
+
+    if (this.major < other.major) {
+      return -1
+    }
+    if (this.major > other.major) {
+      return 1
+    }
+    if (this.minor < other.minor) {
+      return -1
+    }
+    if (this.minor > other.minor) {
+      return 1
+    }
+    if (this.patch < other.patch) {
+      return -1
+    }
+    if (this.patch > other.patch) {
+      return 1
+    }
+    return 0
+  }
+
+  comparePre (other) {
+    if (!(other instanceof SemVer)) {
+      other = new SemVer(other, this.options)
+    }
+
+    // NOT having a prerelease is > having one
+    if (this.prerelease.length && !other.prerelease.length) {
+      return -1
+    } else if (!this.prerelease.length && other.prerelease.length) {
+      return 1
+    } else if (!this.prerelease.length && !other.prerelease.length) {
+      return 0
+    }
+
+    let i = 0
+    do {
+      const a = this.prerelease[i]
+      const b = other.prerelease[i]
+      debug('prerelease compare', i, a, b)
+      if (a === undefined && b === undefined) {
+        return 0
+      } else if (b === undefined) {
+        return 1
+      } else if (a === undefined) {
+        return -1
+      } else if (a === b) {
+        continue
+      } else {
+        return compareIdentifiers(a, b)
+      }
+    } while (++i)
+  }
+
+  compareBuild (other) {
+    if (!(other instanceof SemVer)) {
+      other = new SemVer(other, this.options)
+    }
+
+    let i = 0
+    do {
+      const a = this.build[i]
+      const b = other.build[i]
+      debug('build compare', i, a, b)
+      if (a === undefined && b === undefined) {
+        return 0
+      } else if (b === undefined) {
+        return 1
+      } else if (a === undefined) {
+        return -1
+      } else if (a === b) {
+        continue
+      } else {
+        return compareIdentifiers(a, b)
+      }
+    } while (++i)
+  }
+
+  // preminor will bump the version up to the next minor release, and immediately
+  // down to pre-release. premajor and prepatch work the same way.
+  inc (release, identifier, identifierBase) {
+    if (release.startsWith('pre')) {
+      if (!identifier && identifierBase === false) {
+        throw new Error('invalid increment argument: identifier is empty')
+      }
+      // Avoid an invalid semver results
+      if (identifier) {
+        const match = `-${identifier}`.match(this.options.loose ? re[t.PRERELEASELOOSE] : re[t.PRERELEASE])
+        if (!match || match[1] !== identifier) {
+          throw new Error(`invalid identifier: ${identifier}`)
+        }
+      }
+    }
+
+    switch (release) {
+      case 'premajor':
+        this.prerelease.length = 0
+        this.patch = 0
+        this.minor = 0
+        this.major++
+        this.inc('pre', identifier, identifierBase)
+        break
+      case 'preminor':
+        this.prerelease.length = 0
+        this.patch = 0
+        this.minor++
+        this.inc('pre', identifier, identifierBase)
+        break
+      case 'prepatch':
+        // If this is already a prerelease, it will bump to the next version
+        // drop any prereleases that might already exist, since they are not
+        // relevant at this point.
+        this.prerelease.length = 0
+        this.inc('patch', identifier, identifierBase)
+        this.inc('pre', identifier, identifierBase)
+        break
+      // If the input is a non-prerelease version, this acts the same as
+      // prepatch.
+      case 'prerelease':
+        if (this.prerelease.length === 0) {
+          this.inc('patch', identifier, identifierBase)
+        }
+        this.inc('pre', identifier, identifierBase)
+        break
+      case 'release':
+        if (this.prerelease.length === 0) {
+          throw new Error(`version ${this.raw} is not a prerelease`)
+        }
+        this.prerelease.length = 0
+        break
+
+      case 'major':
+        // If this is a pre-major version, bump up to the same major version.
+        // Otherwise increment major.
+        // 1.0.0-5 bumps to 1.0.0
+        // 1.1.0 bumps to 2.0.0
+        if (
+          this.minor !== 0 ||
+          this.patch !== 0 ||
+          this.prerelease.length === 0
+        ) {
+          this.major++
+        }
+        this.minor = 0
+        this.patch = 0
+        this.prerelease = []
+        break
+      case 'minor':
+        // If this is a pre-minor version, bump up to the same minor version.
+        // Otherwise increment minor.
+        // 1.2.0-5 bumps to 1.2.0
+        // 1.2.1 bumps to 1.3.0
+        if (this.patch !== 0 || this.prerelease.length === 0) {
+          this.minor++
+        }
+        this.patch = 0
+        this.prerelease = []
+        break
+      case 'patch':
+        // If this is not a pre-release version, it will increment the patch.
+        // If it is a pre-release it will bump up to the same patch version.
+        // 1.2.0-5 patches to 1.2.0
+        // 1.2.0 patches to 1.2.1
+        if (this.prerelease.length === 0) {
+          this.patch++
+        }
+        this.prerelease = []
+        break
+      // This probably shouldn't be used publicly.
+      // 1.0.0 'pre' would become 1.0.0-0 which is the wrong direction.
+      case 'pre': {
+        const base = Number(identifierBase) ? 1 : 0
+
+        if (this.prerelease.length === 0) {
+          this.prerelease = [base]
+        } else {
+          let i = this.prerelease.length
+          while (--i >= 0) {
+            if (typeof this.prerelease[i] === 'number') {
+              this.prerelease[i]++
+              i = -2
+            }
+          }
+          if (i === -1) {
+            // didn't increment anything
+            if (identifier === this.prerelease.join('.') && identifierBase === false) {
+              throw new Error('invalid increment argument: identifier already exists')
+            }
+            this.prerelease.push(base)
+          }
+        }
+        if (identifier) {
+          // 1.2.0-beta.1 bumps to 1.2.0-beta.2,
+          // 1.2.0-beta.fooblz or 1.2.0-beta bumps to 1.2.0-beta.0
+          let prerelease = [identifier, base]
+          if (identifierBase === false) {
+            prerelease = [identifier]
+          }
+          if (compareIdentifiers(this.prerelease[0], identifier) === 0) {
+            if (isNaN(this.prerelease[1])) {
+              this.prerelease = prerelease
+            }
+          } else {
+            this.prerelease = prerelease
+          }
+        }
+        break
+      }
+      default:
+        throw new Error(`invalid increment argument: ${release}`)
+    }
+    this.raw = this.format()
+    if (this.build.length) {
+      this.raw += `+${this.build.join('.')}`
+    }
+    return this
+  }
+}
+
+module.exports = SemVer
+
+
+/***/ }),
+
+/***/ 9956:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const parse = __nccwpck_require__(3854)
+const clean = (version, options) => {
+  const s = parse(version.trim().replace(/^[=v]+/, ''), options)
+  return s ? s.version : null
+}
+module.exports = clean
+
+
+/***/ }),
+
+/***/ 2977:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const eq = __nccwpck_require__(2563)
+const neq = __nccwpck_require__(5969)
+const gt = __nccwpck_require__(2098)
+const gte = __nccwpck_require__(5851)
+const lt = __nccwpck_require__(5045)
+const lte = __nccwpck_require__(5462)
+
+const cmp = (a, op, b, loose) => {
+  switch (op) {
+    case '===':
+      if (typeof a === 'object') {
+        a = a.version
+      }
+      if (typeof b === 'object') {
+        b = b.version
+      }
+      return a === b
+
+    case '!==':
+      if (typeof a === 'object') {
+        a = a.version
+      }
+      if (typeof b === 'object') {
+        b = b.version
+      }
+      return a !== b
+
+    case '':
+    case '=':
+    case '==':
+      return eq(a, b, loose)
+
+    case '!=':
+      return neq(a, b, loose)
+
+    case '>':
+      return gt(a, b, loose)
+
+    case '>=':
+      return gte(a, b, loose)
+
+    case '<':
+      return lt(a, b, loose)
+
+    case '<=':
+      return lte(a, b, loose)
+
+    default:
+      throw new TypeError(`Invalid operator: ${op}`)
+  }
+}
+module.exports = cmp
+
+
+/***/ }),
+
+/***/ 7420:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const parse = __nccwpck_require__(3854)
+const { safeRe: re, t } = __nccwpck_require__(5580)
+
+const coerce = (version, options) => {
+  if (version instanceof SemVer) {
+    return version
+  }
+
+  if (typeof version === 'number') {
+    version = String(version)
+  }
+
+  if (typeof version !== 'string') {
+    return null
+  }
+
+  options = options || {}
+
+  let match = null
+  if (!options.rtl) {
+    match = version.match(options.includePrerelease ? re[t.COERCEFULL] : re[t.COERCE])
+  } else {
+    // Find the right-most coercible string that does not share
+    // a terminus with a more left-ward coercible string.
+    // Eg, '1.2.3.4' wants to coerce '2.3.4', not '3.4' or '4'
+    // With includePrerelease option set, '1.2.3.4-rc' wants to coerce '2.3.4-rc', not '2.3.4'
+    //
+    // Walk through the string checking with a /g regexp
+    // Manually set the index so as to pick up overlapping matches.
+    // Stop when we get a match that ends at the string end, since no
+    // coercible string can be more right-ward without the same terminus.
+    const coerceRtlRegex = options.includePrerelease ? re[t.COERCERTLFULL] : re[t.COERCERTL]
+    let next
+    while ((next = coerceRtlRegex.exec(version)) &&
+        (!match || match.index + match[0].length !== version.length)
+    ) {
+      if (!match ||
+            next.index + next[0].length !== match.index + match[0].length) {
+        match = next
+      }
+      coerceRtlRegex.lastIndex = next.index + next[1].length + next[2].length
+    }
+    // leave it in a clean state
+    coerceRtlRegex.lastIndex = -1
+  }
+
+  if (match === null) {
+    return null
+  }
+
+  const major = match[2]
+  const minor = match[3] || '0'
+  const patch = match[4] || '0'
+  const prerelease = options.includePrerelease && match[5] ? `-${match[5]}` : ''
+  const build = options.includePrerelease && match[6] ? `+${match[6]}` : ''
+
+  return parse(`${major}.${minor}.${patch}${prerelease}${build}`, options)
+}
+module.exports = coerce
+
+
+/***/ }),
+
+/***/ 7083:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const compareBuild = (a, b, loose) => {
+  const versionA = new SemVer(a, loose)
+  const versionB = new SemVer(b, loose)
+  return versionA.compare(versionB) || versionA.compareBuild(versionB)
+}
+module.exports = compareBuild
+
+
+/***/ }),
+
+/***/ 825:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const compare = __nccwpck_require__(1306)
+const compareLoose = (a, b) => compare(a, b, true)
+module.exports = compareLoose
+
+
+/***/ }),
+
+/***/ 1306:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const compare = (a, b, loose) =>
+  new SemVer(a, loose).compare(new SemVer(b, loose))
+
+module.exports = compare
+
+
+/***/ }),
+
+/***/ 4962:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const parse = __nccwpck_require__(3854)
+
+const diff = (version1, version2) => {
+  const v1 = parse(version1, null, true)
+  const v2 = parse(version2, null, true)
+  const comparison = v1.compare(v2)
+
+  if (comparison === 0) {
+    return null
+  }
+
+  const v1Higher = comparison > 0
+  const highVersion = v1Higher ? v1 : v2
+  const lowVersion = v1Higher ? v2 : v1
+  const highHasPre = !!highVersion.prerelease.length
+  const lowHasPre = !!lowVersion.prerelease.length
+
+  if (lowHasPre && !highHasPre) {
+    // Going from prerelease -> no prerelease requires some special casing
+
+    // If the low version has only a major, then it will always be a major
+    // Some examples:
+    // 1.0.0-1 -> 1.0.0
+    // 1.0.0-1 -> 1.1.1
+    // 1.0.0-1 -> 2.0.0
+    if (!lowVersion.patch && !lowVersion.minor) {
+      return 'major'
+    }
+
+    // If the main part has no difference
+    if (lowVersion.compareMain(highVersion) === 0) {
+      if (lowVersion.minor && !lowVersion.patch) {
+        return 'minor'
+      }
+      return 'patch'
+    }
+  }
+
+  // add the `pre` prefix if we are going to a prerelease version
+  const prefix = highHasPre ? 'pre' : ''
+
+  if (v1.major !== v2.major) {
+    return prefix + 'major'
+  }
+
+  if (v1.minor !== v2.minor) {
+    return prefix + 'minor'
+  }
+
+  if (v1.patch !== v2.patch) {
+    return prefix + 'patch'
+  }
+
+  // high and low are prereleases
+  return 'prerelease'
+}
+
+module.exports = diff
+
+
+/***/ }),
+
+/***/ 2563:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const compare = __nccwpck_require__(1306)
+const eq = (a, b, loose) => compare(a, b, loose) === 0
+module.exports = eq
+
+
+/***/ }),
+
+/***/ 2098:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const compare = __nccwpck_require__(1306)
+const gt = (a, b, loose) => compare(a, b, loose) > 0
+module.exports = gt
+
+
+/***/ }),
+
+/***/ 5851:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const compare = __nccwpck_require__(1306)
+const gte = (a, b, loose) => compare(a, b, loose) >= 0
+module.exports = gte
+
+
+/***/ }),
+
+/***/ 2341:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+
+const inc = (version, release, options, identifier, identifierBase) => {
+  if (typeof (options) === 'string') {
+    identifierBase = identifier
+    identifier = options
+    options = undefined
+  }
+
+  try {
+    return new SemVer(
+      version instanceof SemVer ? version.version : version,
+      options
+    ).inc(release, identifier, identifierBase).version
+  } catch (er) {
+    return null
+  }
+}
+module.exports = inc
+
+
+/***/ }),
+
+/***/ 5045:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const compare = __nccwpck_require__(1306)
+const lt = (a, b, loose) => compare(a, b, loose) < 0
+module.exports = lt
+
+
+/***/ }),
+
+/***/ 5462:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const compare = __nccwpck_require__(1306)
+const lte = (a, b, loose) => compare(a, b, loose) <= 0
+module.exports = lte
+
+
+/***/ }),
+
+/***/ 6468:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const major = (a, loose) => new SemVer(a, loose).major
+module.exports = major
+
+
+/***/ }),
+
+/***/ 7032:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const minor = (a, loose) => new SemVer(a, loose).minor
+module.exports = minor
+
+
+/***/ }),
+
+/***/ 5969:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const compare = __nccwpck_require__(1306)
+const neq = (a, b, loose) => compare(a, b, loose) !== 0
+module.exports = neq
+
+
+/***/ }),
+
+/***/ 3854:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const parse = (version, options, throwErrors = false) => {
+  if (version instanceof SemVer) {
+    return version
+  }
+  try {
+    return new SemVer(version, options)
+  } catch (er) {
+    if (!throwErrors) {
+      return null
+    }
+    throw er
+  }
+}
+
+module.exports = parse
+
+
+/***/ }),
+
+/***/ 6447:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const patch = (a, loose) => new SemVer(a, loose).patch
+module.exports = patch
+
+
+/***/ }),
+
+/***/ 8359:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const parse = __nccwpck_require__(3854)
+const prerelease = (version, options) => {
+  const parsed = parse(version, options)
+  return (parsed && parsed.prerelease.length) ? parsed.prerelease : null
+}
+module.exports = prerelease
+
+
+/***/ }),
+
+/***/ 6156:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const compare = __nccwpck_require__(1306)
+const rcompare = (a, b, loose) => compare(b, a, loose)
+module.exports = rcompare
+
+
+/***/ }),
+
+/***/ 2659:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const compareBuild = __nccwpck_require__(7083)
+const rsort = (list, loose) => list.sort((a, b) => compareBuild(b, a, loose))
+module.exports = rsort
+
+
+/***/ }),
+
+/***/ 7575:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const Range = __nccwpck_require__(5518)
+const satisfies = (version, range, options) => {
+  try {
+    range = new Range(range, options)
+  } catch (er) {
+    return false
+  }
+  return range.test(version)
+}
+module.exports = satisfies
+
+
+/***/ }),
+
+/***/ 2397:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const compareBuild = __nccwpck_require__(7083)
+const sort = (list, loose) => list.sort((a, b) => compareBuild(a, b, loose))
+module.exports = sort
+
+
+/***/ }),
+
+/***/ 8691:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const parse = __nccwpck_require__(3854)
+const valid = (version, options) => {
+  const v = parse(version, options)
+  return v ? v.version : null
+}
+module.exports = valid
+
+
+/***/ }),
+
+/***/ 9419:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+// just pre-load all the stuff that index.js lazily exports
+const internalRe = __nccwpck_require__(5580)
+const constants = __nccwpck_require__(4256)
+const SemVer = __nccwpck_require__(4154)
+const identifiers = __nccwpck_require__(1713)
+const parse = __nccwpck_require__(3854)
+const valid = __nccwpck_require__(8691)
+const clean = __nccwpck_require__(9956)
+const inc = __nccwpck_require__(2341)
+const diff = __nccwpck_require__(4962)
+const major = __nccwpck_require__(6468)
+const minor = __nccwpck_require__(7032)
+const patch = __nccwpck_require__(6447)
+const prerelease = __nccwpck_require__(8359)
+const compare = __nccwpck_require__(1306)
+const rcompare = __nccwpck_require__(6156)
+const compareLoose = __nccwpck_require__(825)
+const compareBuild = __nccwpck_require__(7083)
+const sort = __nccwpck_require__(2397)
+const rsort = __nccwpck_require__(2659)
+const gt = __nccwpck_require__(2098)
+const lt = __nccwpck_require__(5045)
+const eq = __nccwpck_require__(2563)
+const neq = __nccwpck_require__(5969)
+const gte = __nccwpck_require__(5851)
+const lte = __nccwpck_require__(5462)
+const cmp = __nccwpck_require__(2977)
+const coerce = __nccwpck_require__(7420)
+const Comparator = __nccwpck_require__(6222)
+const Range = __nccwpck_require__(5518)
+const satisfies = __nccwpck_require__(7575)
+const toComparators = __nccwpck_require__(4377)
+const maxSatisfying = __nccwpck_require__(4150)
+const minSatisfying = __nccwpck_require__(2420)
+const minVersion = __nccwpck_require__(7815)
+const validRange = __nccwpck_require__(8072)
+const outside = __nccwpck_require__(4421)
+const gtr = __nccwpck_require__(7173)
+const ltr = __nccwpck_require__(2156)
+const intersects = __nccwpck_require__(2150)
+const simplifyRange = __nccwpck_require__(3963)
+const subset = __nccwpck_require__(826)
+module.exports = {
+  parse,
+  valid,
+  clean,
+  inc,
+  diff,
+  major,
+  minor,
+  patch,
+  prerelease,
+  compare,
+  rcompare,
+  compareLoose,
+  compareBuild,
+  sort,
+  rsort,
+  gt,
+  lt,
+  eq,
+  neq,
+  gte,
+  lte,
+  cmp,
+  coerce,
+  Comparator,
+  Range,
+  satisfies,
+  toComparators,
+  maxSatisfying,
+  minSatisfying,
+  minVersion,
+  validRange,
+  outside,
+  gtr,
+  ltr,
+  intersects,
+  simplifyRange,
+  subset,
+  SemVer,
+  re: internalRe.re,
+  src: internalRe.src,
+  tokens: internalRe.t,
+  SEMVER_SPEC_VERSION: constants.SEMVER_SPEC_VERSION,
+  RELEASE_TYPES: constants.RELEASE_TYPES,
+  compareIdentifiers: identifiers.compareIdentifiers,
+  rcompareIdentifiers: identifiers.rcompareIdentifiers,
+}
+
+
+/***/ }),
+
+/***/ 4256:
+/***/ ((module) => {
+
+"use strict";
+
+
+// Note: this is the semver.org version of the spec that it implements
+// Not necessarily the package version of this code.
+const SEMVER_SPEC_VERSION = '2.0.0'
+
+const MAX_LENGTH = 256
+const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER ||
+/* istanbul ignore next */ 9007199254740991
+
+// Max safe segment length for coercion.
+const MAX_SAFE_COMPONENT_LENGTH = 16
+
+// Max safe length for a build identifier. The max length minus 6 characters for
+// the shortest version with a build 0.0.0+BUILD.
+const MAX_SAFE_BUILD_LENGTH = MAX_LENGTH - 6
+
+const RELEASE_TYPES = [
+  'major',
+  'premajor',
+  'minor',
+  'preminor',
+  'patch',
+  'prepatch',
+  'prerelease',
+]
+
+module.exports = {
+  MAX_LENGTH,
+  MAX_SAFE_COMPONENT_LENGTH,
+  MAX_SAFE_BUILD_LENGTH,
+  MAX_SAFE_INTEGER,
+  RELEASE_TYPES,
+  SEMVER_SPEC_VERSION,
+  FLAG_INCLUDE_PRERELEASE: 0b001,
+  FLAG_LOOSE: 0b010,
+}
+
+
+/***/ }),
+
+/***/ 1542:
+/***/ ((module) => {
+
+"use strict";
+
+
+const debug = (
+  typeof process === 'object' &&
+  process.env &&
+  process.env.NODE_DEBUG &&
+  /\bsemver\b/i.test(process.env.NODE_DEBUG)
+) ? (...args) => console.error('SEMVER', ...args)
+  : () => {}
+
+module.exports = debug
+
+
+/***/ }),
+
+/***/ 1713:
+/***/ ((module) => {
+
+"use strict";
+
+
+const numeric = /^[0-9]+$/
+const compareIdentifiers = (a, b) => {
+  if (typeof a === 'number' && typeof b === 'number') {
+    return a === b ? 0 : a < b ? -1 : 1
+  }
+
+  const anum = numeric.test(a)
+  const bnum = numeric.test(b)
+
+  if (anum && bnum) {
+    a = +a
+    b = +b
+  }
+
+  return a === b ? 0
+    : (anum && !bnum) ? -1
+    : (bnum && !anum) ? 1
+    : a < b ? -1
+    : 1
+}
+
+const rcompareIdentifiers = (a, b) => compareIdentifiers(b, a)
+
+module.exports = {
+  compareIdentifiers,
+  rcompareIdentifiers,
+}
+
+
+/***/ }),
+
+/***/ 5088:
+/***/ ((module) => {
+
+"use strict";
+
+
+class LRUCache {
+  constructor () {
+    this.max = 1000
+    this.map = new Map()
+  }
+
+  get (key) {
+    const value = this.map.get(key)
+    if (value === undefined) {
+      return undefined
+    } else {
+      // Remove the key from the map and add it to the end
+      this.map.delete(key)
+      this.map.set(key, value)
+      return value
+    }
+  }
+
+  delete (key) {
+    return this.map.delete(key)
+  }
+
+  set (key, value) {
+    const deleted = this.delete(key)
+
+    if (!deleted && value !== undefined) {
+      // If cache is full, delete the least recently used item
+      if (this.map.size >= this.max) {
+        const firstKey = this.map.keys().next().value
+        this.delete(firstKey)
+      }
+
+      this.map.set(key, value)
+    }
+
+    return this
+  }
+}
+
+module.exports = LRUCache
+
+
+/***/ }),
+
+/***/ 977:
+/***/ ((module) => {
+
+"use strict";
+
+
+// parse out just the options we care about
+const looseOption = Object.freeze({ loose: true })
+const emptyOpts = Object.freeze({ })
+const parseOptions = options => {
+  if (!options) {
+    return emptyOpts
+  }
+
+  if (typeof options !== 'object') {
+    return looseOption
+  }
+
+  return options
+}
+module.exports = parseOptions
+
+
+/***/ }),
+
+/***/ 5580:
+/***/ ((module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const {
+  MAX_SAFE_COMPONENT_LENGTH,
+  MAX_SAFE_BUILD_LENGTH,
+  MAX_LENGTH,
+} = __nccwpck_require__(4256)
+const debug = __nccwpck_require__(1542)
+exports = module.exports = {}
+
+// The actual regexps go on exports.re
+const re = exports.re = []
+const safeRe = exports.safeRe = []
+const src = exports.src = []
+const safeSrc = exports.safeSrc = []
+const t = exports.t = {}
+let R = 0
+
+const LETTERDASHNUMBER = '[a-zA-Z0-9-]'
+
+// Replace some greedy regex tokens to prevent regex dos issues. These regex are
+// used internally via the safeRe object since all inputs in this library get
+// normalized first to trim and collapse all extra whitespace. The original
+// regexes are exported for userland consumption and lower level usage. A
+// future breaking change could export the safer regex only with a note that
+// all input should have extra whitespace removed.
+const safeRegexReplacements = [
+  ['\\s', 1],
+  ['\\d', MAX_LENGTH],
+  [LETTERDASHNUMBER, MAX_SAFE_BUILD_LENGTH],
+]
+
+const makeSafeRegex = (value) => {
+  for (const [token, max] of safeRegexReplacements) {
+    value = value
+      .split(`${token}*`).join(`${token}{0,${max}}`)
+      .split(`${token}+`).join(`${token}{1,${max}}`)
+  }
+  return value
+}
+
+const createToken = (name, value, isGlobal) => {
+  const safe = makeSafeRegex(value)
+  const index = R++
+  debug(name, index, value)
+  t[name] = index
+  src[index] = value
+  safeSrc[index] = safe
+  re[index] = new RegExp(value, isGlobal ? 'g' : undefined)
+  safeRe[index] = new RegExp(safe, isGlobal ? 'g' : undefined)
+}
+
+// The following Regular Expressions can be used for tokenizing,
+// validating, and parsing SemVer version strings.
+
+// ## Numeric Identifier
+// A single `0`, or a non-zero digit followed by zero or more digits.
+
+createToken('NUMERICIDENTIFIER', '0|[1-9]\\d*')
+createToken('NUMERICIDENTIFIERLOOSE', '\\d+')
+
+// ## Non-numeric Identifier
+// Zero or more digits, followed by a letter or hyphen, and then zero or
+// more letters, digits, or hyphens.
+
+createToken('NONNUMERICIDENTIFIER', `\\d*[a-zA-Z-]${LETTERDASHNUMBER}*`)
+
+// ## Main Version
+// Three dot-separated numeric identifiers.
+
+createToken('MAINVERSION', `(${src[t.NUMERICIDENTIFIER]})\\.` +
+                   `(${src[t.NUMERICIDENTIFIER]})\\.` +
+                   `(${src[t.NUMERICIDENTIFIER]})`)
+
+createToken('MAINVERSIONLOOSE', `(${src[t.NUMERICIDENTIFIERLOOSE]})\\.` +
+                        `(${src[t.NUMERICIDENTIFIERLOOSE]})\\.` +
+                        `(${src[t.NUMERICIDENTIFIERLOOSE]})`)
+
+// ## Pre-release Version Identifier
+// A numeric identifier, or a non-numeric identifier.
+// Non-numeric identifiers include numeric identifiers but can be longer.
+// Therefore non-numeric identifiers must go first.
+
+createToken('PRERELEASEIDENTIFIER', `(?:${src[t.NONNUMERICIDENTIFIER]
+}|${src[t.NUMERICIDENTIFIER]})`)
+
+createToken('PRERELEASEIDENTIFIERLOOSE', `(?:${src[t.NONNUMERICIDENTIFIER]
+}|${src[t.NUMERICIDENTIFIERLOOSE]})`)
+
+// ## Pre-release Version
+// Hyphen, followed by one or more dot-separated pre-release version
+// identifiers.
+
+createToken('PRERELEASE', `(?:-(${src[t.PRERELEASEIDENTIFIER]
+}(?:\\.${src[t.PRERELEASEIDENTIFIER]})*))`)
+
+createToken('PRERELEASELOOSE', `(?:-?(${src[t.PRERELEASEIDENTIFIERLOOSE]
+}(?:\\.${src[t.PRERELEASEIDENTIFIERLOOSE]})*))`)
+
+// ## Build Metadata Identifier
+// Any combination of digits, letters, or hyphens.
+
+createToken('BUILDIDENTIFIER', `${LETTERDASHNUMBER}+`)
+
+// ## Build Metadata
+// Plus sign, followed by one or more period-separated build metadata
+// identifiers.
+
+createToken('BUILD', `(?:\\+(${src[t.BUILDIDENTIFIER]
+}(?:\\.${src[t.BUILDIDENTIFIER]})*))`)
+
+// ## Full Version String
+// A main version, followed optionally by a pre-release version and
+// build metadata.
+
+// Note that the only major, minor, patch, and pre-release sections of
+// the version string are capturing groups.  The build metadata is not a
+// capturing group, because it should not ever be used in version
+// comparison.
+
+createToken('FULLPLAIN', `v?${src[t.MAINVERSION]
+}${src[t.PRERELEASE]}?${
+  src[t.BUILD]}?`)
+
+createToken('FULL', `^${src[t.FULLPLAIN]}$`)
+
+// like full, but allows v1.2.3 and =1.2.3, which people do sometimes.
+// also, 1.0.0alpha1 (prerelease without the hyphen) which is pretty
+// common in the npm registry.
+createToken('LOOSEPLAIN', `[v=\\s]*${src[t.MAINVERSIONLOOSE]
+}${src[t.PRERELEASELOOSE]}?${
+  src[t.BUILD]}?`)
+
+createToken('LOOSE', `^${src[t.LOOSEPLAIN]}$`)
+
+createToken('GTLT', '((?:<|>)?=?)')
+
+// Something like "2.*" or "1.2.x".
+// Note that "x.x" is a valid xRange identifer, meaning "any version"
+// Only the first item is strictly required.
+createToken('XRANGEIDENTIFIERLOOSE', `${src[t.NUMERICIDENTIFIERLOOSE]}|x|X|\\*`)
+createToken('XRANGEIDENTIFIER', `${src[t.NUMERICIDENTIFIER]}|x|X|\\*`)
+
+createToken('XRANGEPLAIN', `[v=\\s]*(${src[t.XRANGEIDENTIFIER]})` +
+                   `(?:\\.(${src[t.XRANGEIDENTIFIER]})` +
+                   `(?:\\.(${src[t.XRANGEIDENTIFIER]})` +
+                   `(?:${src[t.PRERELEASE]})?${
+                     src[t.BUILD]}?` +
+                   `)?)?`)
+
+createToken('XRANGEPLAINLOOSE', `[v=\\s]*(${src[t.XRANGEIDENTIFIERLOOSE]})` +
+                        `(?:\\.(${src[t.XRANGEIDENTIFIERLOOSE]})` +
+                        `(?:\\.(${src[t.XRANGEIDENTIFIERLOOSE]})` +
+                        `(?:${src[t.PRERELEASELOOSE]})?${
+                          src[t.BUILD]}?` +
+                        `)?)?`)
+
+createToken('XRANGE', `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAIN]}$`)
+createToken('XRANGELOOSE', `^${src[t.GTLT]}\\s*${src[t.XRANGEPLAINLOOSE]}$`)
+
+// Coercion.
+// Extract anything that could conceivably be a part of a valid semver
+createToken('COERCEPLAIN', `${'(^|[^\\d])' +
+              '(\\d{1,'}${MAX_SAFE_COMPONENT_LENGTH}})` +
+              `(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?` +
+              `(?:\\.(\\d{1,${MAX_SAFE_COMPONENT_LENGTH}}))?`)
+createToken('COERCE', `${src[t.COERCEPLAIN]}(?:$|[^\\d])`)
+createToken('COERCEFULL', src[t.COERCEPLAIN] +
+              `(?:${src[t.PRERELEASE]})?` +
+              `(?:${src[t.BUILD]})?` +
+              `(?:$|[^\\d])`)
+createToken('COERCERTL', src[t.COERCE], true)
+createToken('COERCERTLFULL', src[t.COERCEFULL], true)
+
+// Tilde ranges.
+// Meaning is "reasonably at or greater than"
+createToken('LONETILDE', '(?:~>?)')
+
+createToken('TILDETRIM', `(\\s*)${src[t.LONETILDE]}\\s+`, true)
+exports.tildeTrimReplace = '$1~'
+
+createToken('TILDE', `^${src[t.LONETILDE]}${src[t.XRANGEPLAIN]}$`)
+createToken('TILDELOOSE', `^${src[t.LONETILDE]}${src[t.XRANGEPLAINLOOSE]}$`)
+
+// Caret ranges.
+// Meaning is "at least and backwards compatible with"
+createToken('LONECARET', '(?:\\^)')
+
+createToken('CARETTRIM', `(\\s*)${src[t.LONECARET]}\\s+`, true)
+exports.caretTrimReplace = '$1^'
+
+createToken('CARET', `^${src[t.LONECARET]}${src[t.XRANGEPLAIN]}$`)
+createToken('CARETLOOSE', `^${src[t.LONECARET]}${src[t.XRANGEPLAINLOOSE]}$`)
+
+// A simple gt/lt/eq thing, or just "" to indicate "any version"
+createToken('COMPARATORLOOSE', `^${src[t.GTLT]}\\s*(${src[t.LOOSEPLAIN]})$|^$`)
+createToken('COMPARATOR', `^${src[t.GTLT]}\\s*(${src[t.FULLPLAIN]})$|^$`)
+
+// An expression to strip any whitespace between the gtlt and the thing
+// it modifies, so that `> 1.2.3` ==> `>1.2.3`
+createToken('COMPARATORTRIM', `(\\s*)${src[t.GTLT]
+}\\s*(${src[t.LOOSEPLAIN]}|${src[t.XRANGEPLAIN]})`, true)
+exports.comparatorTrimReplace = '$1$2$3'
+
+// Something like `1.2.3 - 1.2.4`
+// Note that these all use the loose form, because they'll be
+// checked against either the strict or loose comparator form
+// later.
+createToken('HYPHENRANGE', `^\\s*(${src[t.XRANGEPLAIN]})` +
+                   `\\s+-\\s+` +
+                   `(${src[t.XRANGEPLAIN]})` +
+                   `\\s*$`)
+
+createToken('HYPHENRANGELOOSE', `^\\s*(${src[t.XRANGEPLAINLOOSE]})` +
+                        `\\s+-\\s+` +
+                        `(${src[t.XRANGEPLAINLOOSE]})` +
+                        `\\s*$`)
+
+// Star ranges basically just allow anything at all.
+createToken('STAR', '(<|>)?=?\\s*\\*')
+// >=0.0.0 is like a star
+createToken('GTE0', '^\\s*>=\\s*0\\.0\\.0\\s*$')
+createToken('GTE0PRE', '^\\s*>=\\s*0\\.0\\.0-0\\s*$')
+
+
+/***/ }),
+
+/***/ 7173:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+// Determine if version is greater than all the versions possible in the range.
+const outside = __nccwpck_require__(4421)
+const gtr = (version, range, options) => outside(version, range, '>', options)
+module.exports = gtr
+
+
+/***/ }),
+
+/***/ 2150:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const Range = __nccwpck_require__(5518)
+const intersects = (r1, r2, options) => {
+  r1 = new Range(r1, options)
+  r2 = new Range(r2, options)
+  return r1.intersects(r2, options)
+}
+module.exports = intersects
+
+
+/***/ }),
+
+/***/ 2156:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const outside = __nccwpck_require__(4421)
+// Determine if version is less than all the versions possible in the range
+const ltr = (version, range, options) => outside(version, range, '<', options)
+module.exports = ltr
+
+
+/***/ }),
+
+/***/ 4150:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const Range = __nccwpck_require__(5518)
+
+const maxSatisfying = (versions, range, options) => {
+  let max = null
+  let maxSV = null
+  let rangeObj = null
+  try {
+    rangeObj = new Range(range, options)
+  } catch (er) {
+    return null
+  }
+  versions.forEach((v) => {
+    if (rangeObj.test(v)) {
+      // satisfies(v, range, options)
+      if (!max || maxSV.compare(v) === -1) {
+        // compare(max, v, true)
+        max = v
+        maxSV = new SemVer(max, options)
+      }
+    }
+  })
+  return max
+}
+module.exports = maxSatisfying
+
+
+/***/ }),
+
+/***/ 2420:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const Range = __nccwpck_require__(5518)
+const minSatisfying = (versions, range, options) => {
+  let min = null
+  let minSV = null
+  let rangeObj = null
+  try {
+    rangeObj = new Range(range, options)
+  } catch (er) {
+    return null
+  }
+  versions.forEach((v) => {
+    if (rangeObj.test(v)) {
+      // satisfies(v, range, options)
+      if (!min || minSV.compare(v) === 1) {
+        // compare(min, v, true)
+        min = v
+        minSV = new SemVer(min, options)
+      }
+    }
+  })
+  return min
+}
+module.exports = minSatisfying
+
+
+/***/ }),
+
+/***/ 7815:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const Range = __nccwpck_require__(5518)
+const gt = __nccwpck_require__(2098)
+
+const minVersion = (range, loose) => {
+  range = new Range(range, loose)
+
+  let minver = new SemVer('0.0.0')
+  if (range.test(minver)) {
+    return minver
+  }
+
+  minver = new SemVer('0.0.0-0')
+  if (range.test(minver)) {
+    return minver
+  }
+
+  minver = null
+  for (let i = 0; i < range.set.length; ++i) {
+    const comparators = range.set[i]
+
+    let setMin = null
+    comparators.forEach((comparator) => {
+      // Clone to avoid manipulating the comparator's semver object.
+      const compver = new SemVer(comparator.semver.version)
+      switch (comparator.operator) {
+        case '>':
+          if (compver.prerelease.length === 0) {
+            compver.patch++
+          } else {
+            compver.prerelease.push(0)
+          }
+          compver.raw = compver.format()
+          /* fallthrough */
+        case '':
+        case '>=':
+          if (!setMin || gt(compver, setMin)) {
+            setMin = compver
+          }
+          break
+        case '<':
+        case '<=':
+          /* Ignore maximum versions */
+          break
+        /* istanbul ignore next */
+        default:
+          throw new Error(`Unexpected operation: ${comparator.operator}`)
+      }
+    })
+    if (setMin && (!minver || gt(minver, setMin))) {
+      minver = setMin
+    }
+  }
+
+  if (minver && range.test(minver)) {
+    return minver
+  }
+
+  return null
+}
+module.exports = minVersion
+
+
+/***/ }),
+
+/***/ 4421:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const SemVer = __nccwpck_require__(4154)
+const Comparator = __nccwpck_require__(6222)
+const { ANY } = Comparator
+const Range = __nccwpck_require__(5518)
+const satisfies = __nccwpck_require__(7575)
+const gt = __nccwpck_require__(2098)
+const lt = __nccwpck_require__(5045)
+const lte = __nccwpck_require__(5462)
+const gte = __nccwpck_require__(5851)
+
+const outside = (version, range, hilo, options) => {
+  version = new SemVer(version, options)
+  range = new Range(range, options)
+
+  let gtfn, ltefn, ltfn, comp, ecomp
+  switch (hilo) {
+    case '>':
+      gtfn = gt
+      ltefn = lte
+      ltfn = lt
+      comp = '>'
+      ecomp = '>='
+      break
+    case '<':
+      gtfn = lt
+      ltefn = gte
+      ltfn = gt
+      comp = '<'
+      ecomp = '<='
+      break
+    default:
+      throw new TypeError('Must provide a hilo val of "<" or ">"')
+  }
+
+  // If it satisfies the range it is not outside
+  if (satisfies(version, range, options)) {
+    return false
+  }
+
+  // From now on, variable terms are as if we're in "gtr" mode.
+  // but note that everything is flipped for the "ltr" function.
+
+  for (let i = 0; i < range.set.length; ++i) {
+    const comparators = range.set[i]
+
+    let high = null
+    let low = null
+
+    comparators.forEach((comparator) => {
+      if (comparator.semver === ANY) {
+        comparator = new Comparator('>=0.0.0')
+      }
+      high = high || comparator
+      low = low || comparator
+      if (gtfn(comparator.semver, high.semver, options)) {
+        high = comparator
+      } else if (ltfn(comparator.semver, low.semver, options)) {
+        low = comparator
+      }
+    })
+
+    // If the edge version comparator has a operator then our version
+    // isn't outside it
+    if (high.operator === comp || high.operator === ecomp) {
+      return false
+    }
+
+    // If the lowest version comparator has an operator and our version
+    // is less than it then it isn't higher than the range
+    if ((!low.operator || low.operator === comp) &&
+        ltefn(version, low.semver)) {
+      return false
+    } else if (low.operator === ecomp && ltfn(version, low.semver)) {
+      return false
+    }
+  }
+  return true
+}
+
+module.exports = outside
+
+
+/***/ }),
+
+/***/ 3963:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+// given a set of versions and a range, create a "simplified" range
+// that includes the same versions that the original range does
+// If the original range is shorter than the simplified one, return that.
+const satisfies = __nccwpck_require__(7575)
+const compare = __nccwpck_require__(1306)
+module.exports = (versions, range, options) => {
+  const set = []
+  let first = null
+  let prev = null
+  const v = versions.sort((a, b) => compare(a, b, options))
+  for (const version of v) {
+    const included = satisfies(version, range, options)
+    if (included) {
+      prev = version
+      if (!first) {
+        first = version
+      }
+    } else {
+      if (prev) {
+        set.push([first, prev])
+      }
+      prev = null
+      first = null
+    }
+  }
+  if (first) {
+    set.push([first, null])
+  }
+
+  const ranges = []
+  for (const [min, max] of set) {
+    if (min === max) {
+      ranges.push(min)
+    } else if (!max && min === v[0]) {
+      ranges.push('*')
+    } else if (!max) {
+      ranges.push(`>=${min}`)
+    } else if (min === v[0]) {
+      ranges.push(`<=${max}`)
+    } else {
+      ranges.push(`${min} - ${max}`)
+    }
+  }
+  const simplified = ranges.join(' || ')
+  const original = typeof range.raw === 'string' ? range.raw : String(range)
+  return simplified.length < original.length ? simplified : range
+}
+
+
+/***/ }),
+
+/***/ 826:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const Range = __nccwpck_require__(5518)
+const Comparator = __nccwpck_require__(6222)
+const { ANY } = Comparator
+const satisfies = __nccwpck_require__(7575)
+const compare = __nccwpck_require__(1306)
+
+// Complex range `r1 || r2 || ...` is a subset of `R1 || R2 || ...` iff:
+// - Every simple range `r1, r2, ...` is a null set, OR
+// - Every simple range `r1, r2, ...` which is not a null set is a subset of
+//   some `R1, R2, ...`
+//
+// Simple range `c1 c2 ...` is a subset of simple range `C1 C2 ...` iff:
+// - If c is only the ANY comparator
+//   - If C is only the ANY comparator, return true
+//   - Else if in prerelease mode, return false
+//   - else replace c with `[>=0.0.0]`
+// - If C is only the ANY comparator
+//   - if in prerelease mode, return true
+//   - else replace C with `[>=0.0.0]`
+// - Let EQ be the set of = comparators in c
+// - If EQ is more than one, return true (null set)
+// - Let GT be the highest > or >= comparator in c
+// - Let LT be the lowest < or <= comparator in c
+// - If GT and LT, and GT.semver > LT.semver, return true (null set)
+// - If any C is a = range, and GT or LT are set, return false
+// - If EQ
+//   - If GT, and EQ does not satisfy GT, return true (null set)
+//   - If LT, and EQ does not satisfy LT, return true (null set)
+//   - If EQ satisfies every C, return true
+//   - Else return false
+// - If GT
+//   - If GT.semver is lower than any > or >= comp in C, return false
+//   - If GT is >=, and GT.semver does not satisfy every C, return false
+//   - If GT.semver has a prerelease, and not in prerelease mode
+//     - If no C has a prerelease and the GT.semver tuple, return false
+// - If LT
+//   - If LT.semver is greater than any < or <= comp in C, return false
+//   - If LT is <=, and LT.semver does not satisfy every C, return false
+//   - If LT.semver has a prerelease, and not in prerelease mode
+//     - If no C has a prerelease and the LT.semver tuple, return false
+// - Else return true
+
+const subset = (sub, dom, options = {}) => {
+  if (sub === dom) {
+    return true
+  }
+
+  sub = new Range(sub, options)
+  dom = new Range(dom, options)
+  let sawNonNull = false
+
+  OUTER: for (const simpleSub of sub.set) {
+    for (const simpleDom of dom.set) {
+      const isSub = simpleSubset(simpleSub, simpleDom, options)
+      sawNonNull = sawNonNull || isSub !== null
+      if (isSub) {
+        continue OUTER
+      }
+    }
+    // the null set is a subset of everything, but null simple ranges in
+    // a complex range should be ignored.  so if we saw a non-null range,
+    // then we know this isn't a subset, but if EVERY simple range was null,
+    // then it is a subset.
+    if (sawNonNull) {
+      return false
+    }
+  }
+  return true
+}
+
+const minimumVersionWithPreRelease = [new Comparator('>=0.0.0-0')]
+const minimumVersion = [new Comparator('>=0.0.0')]
+
+const simpleSubset = (sub, dom, options) => {
+  if (sub === dom) {
+    return true
+  }
+
+  if (sub.length === 1 && sub[0].semver === ANY) {
+    if (dom.length === 1 && dom[0].semver === ANY) {
+      return true
+    } else if (options.includePrerelease) {
+      sub = minimumVersionWithPreRelease
+    } else {
+      sub = minimumVersion
+    }
+  }
+
+  if (dom.length === 1 && dom[0].semver === ANY) {
+    if (options.includePrerelease) {
+      return true
+    } else {
+      dom = minimumVersion
+    }
+  }
+
+  const eqSet = new Set()
+  let gt, lt
+  for (const c of sub) {
+    if (c.operator === '>' || c.operator === '>=') {
+      gt = higherGT(gt, c, options)
+    } else if (c.operator === '<' || c.operator === '<=') {
+      lt = lowerLT(lt, c, options)
+    } else {
+      eqSet.add(c.semver)
+    }
+  }
+
+  if (eqSet.size > 1) {
+    return null
+  }
+
+  let gtltComp
+  if (gt && lt) {
+    gtltComp = compare(gt.semver, lt.semver, options)
+    if (gtltComp > 0) {
+      return null
+    } else if (gtltComp === 0 && (gt.operator !== '>=' || lt.operator !== '<=')) {
+      return null
+    }
+  }
+
+  // will iterate one or zero times
+  for (const eq of eqSet) {
+    if (gt && !satisfies(eq, String(gt), options)) {
+      return null
+    }
+
+    if (lt && !satisfies(eq, String(lt), options)) {
+      return null
+    }
+
+    for (const c of dom) {
+      if (!satisfies(eq, String(c), options)) {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  let higher, lower
+  let hasDomLT, hasDomGT
+  // if the subset has a prerelease, we need a comparator in the superset
+  // with the same tuple and a prerelease, or it's not a subset
+  let needDomLTPre = lt &&
+    !options.includePrerelease &&
+    lt.semver.prerelease.length ? lt.semver : false
+  let needDomGTPre = gt &&
+    !options.includePrerelease &&
+    gt.semver.prerelease.length ? gt.semver : false
+  // exception: <1.2.3-0 is the same as <1.2.3
+  if (needDomLTPre && needDomLTPre.prerelease.length === 1 &&
+      lt.operator === '<' && needDomLTPre.prerelease[0] === 0) {
+    needDomLTPre = false
+  }
+
+  for (const c of dom) {
+    hasDomGT = hasDomGT || c.operator === '>' || c.operator === '>='
+    hasDomLT = hasDomLT || c.operator === '<' || c.operator === '<='
+    if (gt) {
+      if (needDomGTPre) {
+        if (c.semver.prerelease && c.semver.prerelease.length &&
+            c.semver.major === needDomGTPre.major &&
+            c.semver.minor === needDomGTPre.minor &&
+            c.semver.patch === needDomGTPre.patch) {
+          needDomGTPre = false
+        }
+      }
+      if (c.operator === '>' || c.operator === '>=') {
+        higher = higherGT(gt, c, options)
+        if (higher === c && higher !== gt) {
+          return false
+        }
+      } else if (gt.operator === '>=' && !satisfies(gt.semver, String(c), options)) {
+        return false
+      }
+    }
+    if (lt) {
+      if (needDomLTPre) {
+        if (c.semver.prerelease && c.semver.prerelease.length &&
+            c.semver.major === needDomLTPre.major &&
+            c.semver.minor === needDomLTPre.minor &&
+            c.semver.patch === needDomLTPre.patch) {
+          needDomLTPre = false
+        }
+      }
+      if (c.operator === '<' || c.operator === '<=') {
+        lower = lowerLT(lt, c, options)
+        if (lower === c && lower !== lt) {
+          return false
+        }
+      } else if (lt.operator === '<=' && !satisfies(lt.semver, String(c), options)) {
+        return false
+      }
+    }
+    if (!c.operator && (lt || gt) && gtltComp !== 0) {
+      return false
+    }
+  }
+
+  // if there was a < or >, and nothing in the dom, then must be false
+  // UNLESS it was limited by another range in the other direction.
+  // Eg, >1.0.0 <1.0.1 is still a subset of <2.0.0
+  if (gt && hasDomLT && !lt && gtltComp !== 0) {
+    return false
+  }
+
+  if (lt && hasDomGT && !gt && gtltComp !== 0) {
+    return false
+  }
+
+  // we needed a prerelease range in a specific tuple, but didn't get one
+  // then this isn't a subset.  eg >=1.2.3-pre is not a subset of >=1.0.0,
+  // because it includes prereleases in the 1.2.3 tuple
+  if (needDomGTPre || needDomLTPre) {
+    return false
+  }
+
+  return true
+}
+
+// >=1.2.3 is lower than >1.2.3
+const higherGT = (a, b, options) => {
+  if (!a) {
+    return b
+  }
+  const comp = compare(a.semver, b.semver, options)
+  return comp > 0 ? a
+    : comp < 0 ? b
+    : b.operator === '>' && a.operator === '>=' ? b
+    : a
+}
+
+// <=1.2.3 is higher than <1.2.3
+const lowerLT = (a, b, options) => {
+  if (!a) {
+    return b
+  }
+  const comp = compare(a.semver, b.semver, options)
+  return comp < 0 ? a
+    : comp > 0 ? b
+    : b.operator === '<' && a.operator === '<=' ? b
+    : a
+}
+
+module.exports = subset
+
+
+/***/ }),
+
+/***/ 4377:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const Range = __nccwpck_require__(5518)
+
+// Mostly just for testing and legacy API reasons
+const toComparators = (range, options) =>
+  new Range(range, options).set
+    .map(comp => comp.map(c => c.value).join(' ').trim().split(' '))
+
+module.exports = toComparators
+
+
+/***/ }),
+
+/***/ 8072:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const Range = __nccwpck_require__(5518)
+const validRange = (range, options) => {
+  try {
+    // Return '*' instead of '' so that truthiness works.
+    // This will throw if it's invalid anyway
+    return new Range(range, options).range || '*'
+  } catch (er) {
+    return null
+  }
+}
+module.exports = validRange
+
+
+/***/ }),
+
 /***/ 1011:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -258469,23 +261184,61 @@ exports.addCommentReaction = addCommentReaction;
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.deleteJulesSession = exports.summarizeJulesSession = exports.listJulesActivities = exports.sendJulesMessage = exports.approveJulesPlan = exports.getJulesSession = exports.createJulesFixSession = exports.createJulesSession = exports.createJulesAnalysisSession = exports.listJulesSources = void 0;
+exports.deleteJulesSession = exports.approveJulesPlan = exports.summarizeJulesSession = exports.waitForJulesSession = exports.extractPatchArtifacts = exports.extractAnalysisMarkdown = exports.listAllJulesActivities = exports.listJulesActivities = exports.getJulesSession = exports.createJulesFixSession = exports.createJulesSession = exports.createJulesAnalysisSession = exports.resolveJulesSource = exports.listJulesSources = exports.JulesMissingPatchArtifactError = exports.JulesSessionStatusError = exports.JulesSourceNotFoundError = exports.JulesApiError = void 0;
 const payload_js_1 = __nccwpck_require__(1947);
+class JulesApiError extends Error {
+    status;
+    constructor(status, message) {
+        super(message);
+        this.name = "JulesApiError";
+        this.status = status;
+    }
+}
+exports.JulesApiError = JulesApiError;
+class JulesSourceNotFoundError extends Error {
+    constructor(owner, repo) {
+        super(`Could not resolve Jules source for ${owner}/${repo}.`);
+        this.name = "JulesSourceNotFoundError";
+    }
+}
+exports.JulesSourceNotFoundError = JulesSourceNotFoundError;
+class JulesSessionStatusError extends Error {
+    sessionName;
+    state;
+    constructor(sessionName, state, message) {
+        super(message);
+        this.name = "JulesSessionStatusError";
+        this.sessionName = sessionName;
+        this.state = state;
+    }
+}
+exports.JulesSessionStatusError = JulesSessionStatusError;
+class JulesMissingPatchArtifactError extends Error {
+    constructor(sessionName) {
+        super(`No git patch artifacts were found for Jules session ${sessionName}.`);
+        this.name = "JulesMissingPatchArtifactError";
+    }
+}
+exports.JulesMissingPatchArtifactError = JulesMissingPatchArtifactError;
 const defaultDependencies = {
     fetch: globalThis.fetch.bind(globalThis),
 };
 const BASE_URL = "https://jules.googleapis.com/v1alpha";
+const DEFAULT_PAGE_SIZE = 100;
+const INITIAL_POLL_DELAY_MS = 5_000;
+const MAX_POLL_DELAY_MS = 15_000;
+const MAX_POLL_WAIT_MS = 10 * 60 * 1_000;
 const getHeaders = (apiKey) => ({
     "Content-Type": "application/json",
     "X-Goog-Api-Key": apiKey,
 });
 const handleResponse = async (response) => {
     if (response.status === 429) {
-        throw new Error("Jules API rate limit exceeded (429). Please retry in one hour.");
+        throw new JulesApiError(429, "Jules API rate limit exceeded (429). Please retry in one hour.");
     }
     if (!response.ok) {
         const errorBody = await response.text();
-        throw new Error(`Jules API request failed with status ${response.status}: ${errorBody}`);
+        throw new JulesApiError(response.status, `Jules API request failed with status ${response.status}: ${errorBody}`);
     }
     if (response.status === 204) {
         return {};
@@ -258493,6 +261246,9 @@ const handleResponse = async (response) => {
     const text = await response.text();
     return (text ? JSON.parse(text) : {});
 };
+const sleep = async (ms) => new Promise((resolve) => {
+    setTimeout(resolve, ms);
+});
 const createSession = async (apiKey, request, deps = defaultDependencies) => {
     const response = await deps.fetch(`${BASE_URL}/sessions`, {
         method: "POST",
@@ -258501,44 +261257,74 @@ const createSession = async (apiKey, request, deps = defaultDependencies) => {
     });
     return handleResponse(response);
 };
-/**
- * Lists available sources for the Jules API.
- */
-const listJulesSources = async (apiKey, deps = defaultDependencies) => {
-    const response = await deps.fetch(`${BASE_URL}/sources`, {
+const listJulesSources = async (apiKey, pageSize = DEFAULT_PAGE_SIZE, pageToken = undefined, deps = defaultDependencies) => {
+    const params = new URLSearchParams({
+        pageSize: String(pageSize),
+    });
+    if (pageToken) {
+        params.set("pageToken", pageToken);
+    }
+    const response = await deps.fetch(`${BASE_URL}/sources?${params.toString()}`, {
         headers: getHeaders(apiKey),
     });
     return handleResponse(response);
 };
 exports.listJulesSources = listJulesSources;
-const createJulesAnalysisSession = async (apiKey, repoOwner, repoName, drift, deps = defaultDependencies) => createSession(apiKey, {
+const resolveJulesSource = async (apiKey, owner, repo, deps = defaultDependencies) => {
+    let pageToken;
+    do {
+        const response = await (0, exports.listJulesSources)(apiKey, DEFAULT_PAGE_SIZE, pageToken, deps);
+        const source = response.sources.find((candidate) => candidate.githubRepo.owner === owner &&
+            candidate.githubRepo.repo === repo);
+        if (source) {
+            return {
+                sourceName: source.name,
+                defaultBranch: source.githubRepo.defaultBranch?.displayName ?? "main",
+            };
+        }
+        pageToken = response.nextPageToken;
+    } while (pageToken);
+    throw new JulesSourceNotFoundError(owner, repo);
+};
+exports.resolveJulesSource = resolveJulesSource;
+const getSessionFailureReason = (activities) => {
+    for (let index = activities.length - 1; index >= 0; index -= 1) {
+        const activity = activities[index];
+        if (!activity)
+            continue;
+        if ("sessionFailed" in activity && activity.sessionFailed?.reason) {
+            return activity.sessionFailed.reason;
+        }
+    }
+    return undefined;
+};
+const isChangeSetArtifact = (artifact) => typeof artifact?.changeSet?.gitPatch
+    ?.unidiffPatch === "string";
+const createJulesAnalysisSession = async (apiKey, source, drift, deps = defaultDependencies) => createSession(apiKey, {
     title: `depSync: Analyze ${drift.dependencyName}`,
     prompt: (0, payload_js_1.buildAnalysisPayload)(drift.dependencyName, drift.payloads, drift.releaseNotes),
     sourceContext: {
-        source: `sources/github/${repoOwner}/${repoName}`,
+        source: source.sourceName,
         githubRepoContext: {
-            startingBranch: "main",
+            startingBranch: source.defaultBranch,
         },
     },
     automationMode: "AUTOMATION_MODE_UNSPECIFIED",
 }, deps);
 exports.createJulesAnalysisSession = createJulesAnalysisSession;
 exports.createJulesSession = exports.createJulesAnalysisSession;
-const createJulesFixSession = async (apiKey, repoOwner, repoName, drift, deps = defaultDependencies) => createSession(apiKey, {
+const createJulesFixSession = async (apiKey, source, drift, deps = defaultDependencies) => createSession(apiKey, {
     title: `depSync: Fix ${drift.dependencyName}`,
     prompt: (0, payload_js_1.buildFixPayload)(drift.dependencyName, drift.payloads, drift.releaseNotes),
     sourceContext: {
-        source: `sources/github/${repoOwner}/${repoName}`,
+        source: source.sourceName,
         githubRepoContext: {
-            startingBranch: "main",
+            startingBranch: source.defaultBranch,
         },
     },
     automationMode: "AUTOMATION_MODE_UNSPECIFIED",
 }, deps);
 exports.createJulesFixSession = createJulesFixSession;
-/**
- * Gets the details of an existing Jules session.
- */
 const getJulesSession = async (apiKey, sessionName, deps = defaultDependencies) => {
     const response = await deps.fetch(`${BASE_URL}/${sessionName}`, {
         headers: getHeaders(apiKey),
@@ -258546,9 +261332,92 @@ const getJulesSession = async (apiKey, sessionName, deps = defaultDependencies) 
     return handleResponse(response);
 };
 exports.getJulesSession = getJulesSession;
-/**
- * Approves the latest plan in a Jules session.
- */
+const listJulesActivities = async (apiKey, sessionName, pageSize = DEFAULT_PAGE_SIZE, pageToken = undefined, deps = defaultDependencies) => {
+    const params = new URLSearchParams({
+        pageSize: String(pageSize),
+    });
+    if (pageToken) {
+        params.set("pageToken", pageToken);
+    }
+    const response = await deps.fetch(`${BASE_URL}/${sessionName}/activities?${params.toString()}`, {
+        headers: getHeaders(apiKey),
+    });
+    return handleResponse(response);
+};
+exports.listJulesActivities = listJulesActivities;
+const listAllJulesActivities = async (apiKey, sessionName, deps = defaultDependencies) => {
+    let pageToken;
+    const activities = [];
+    do {
+        const response = await (0, exports.listJulesActivities)(apiKey, sessionName, DEFAULT_PAGE_SIZE, pageToken, deps);
+        activities.push(...response.activities);
+        pageToken = response.nextPageToken;
+    } while (pageToken);
+    return activities.sort((left, right) => new Date(left.createTime).getTime() -
+        new Date(right.createTime).getTime());
+};
+exports.listAllJulesActivities = listAllJulesActivities;
+const extractAnalysisMarkdown = (activities) => {
+    for (let index = activities.length - 1; index >= 0; index -= 1) {
+        const activity = activities[index];
+        if (!activity)
+            continue;
+        if ("agentMessaged" in activity && activity.agentMessaged?.agentMessage) {
+            return activity.agentMessaged.agentMessage;
+        }
+    }
+    return null;
+};
+exports.extractAnalysisMarkdown = extractAnalysisMarkdown;
+const extractPatchArtifacts = (sessionName, activities) => {
+    const patches = activities.flatMap((activity) => (activity.artifacts ?? []).flatMap((artifact) => {
+        if (!isChangeSetArtifact(artifact))
+            return [];
+        const patch = artifact.changeSet.gitPatch.unidiffPatch;
+        return [
+            {
+                activityName: activity.name,
+                createTime: activity.createTime,
+                patch,
+                suggestedCommitMessage: artifact.changeSet.gitPatch.suggestedCommitMessage,
+            },
+        ];
+    }));
+    if (patches.length === 0) {
+        throw new JulesMissingPatchArtifactError(sessionName);
+    }
+    return patches;
+};
+exports.extractPatchArtifacts = extractPatchArtifacts;
+const waitForJulesSession = async (apiKey, sessionName, deps = defaultDependencies) => {
+    const startedAt = Date.now();
+    let delayMs = INITIAL_POLL_DELAY_MS;
+    while (Date.now() - startedAt <= MAX_POLL_WAIT_MS) {
+        const session = await (0, exports.getJulesSession)(apiKey, sessionName, deps);
+        if (session.state === "COMPLETED") {
+            return session;
+        }
+        if (session.state === "FAILED") {
+            const activities = await (0, exports.listAllJulesActivities)(apiKey, sessionName, deps).catch(() => []);
+            const reason = getSessionFailureReason(activities);
+            throw new JulesSessionStatusError(sessionName, "FAILED", reason
+                ? `Jules session ${sessionName} failed: ${reason}`
+                : `Jules session ${sessionName} failed.`);
+        }
+        await sleep(delayMs);
+        delayMs = Math.min(delayMs * 2, MAX_POLL_DELAY_MS);
+    }
+    throw new JulesSessionStatusError(sessionName, "TIMEOUT", `Timed out waiting for Jules session ${sessionName} to complete.`);
+};
+exports.waitForJulesSession = waitForJulesSession;
+const summarizeJulesSession = async (apiKey, sessionName, deps = defaultDependencies) => {
+    const activities = await (0, exports.listAllJulesActivities)(apiKey, sessionName, deps);
+    return {
+        activityCount: activities.length,
+        analysisMarkdown: (0, exports.extractAnalysisMarkdown)(activities),
+    };
+};
+exports.summarizeJulesSession = summarizeJulesSession;
 const approveJulesPlan = async (apiKey, sessionName, deps = defaultDependencies) => {
     const response = await deps.fetch(`${BASE_URL}/${sessionName}:approvePlan`, {
         method: "POST",
@@ -258557,70 +261426,6 @@ const approveJulesPlan = async (apiKey, sessionName, deps = defaultDependencies)
     await handleResponse(response);
 };
 exports.approveJulesPlan = approveJulesPlan;
-/**
- * Sends a message to an existing Jules session and collects file artifacts.
- */
-const sendJulesMessage = async (apiKey, sessionName, prompt, deps = defaultDependencies) => {
-    const response = await deps.fetch(`${BASE_URL}/${sessionName}:sendMessage`, {
-        method: "POST",
-        headers: getHeaders(apiKey),
-        body: JSON.stringify({ prompt }),
-    });
-    await handleResponse(response);
-    const activities = await (0, exports.listJulesActivities)(apiKey, sessionName, 20, deps);
-    const fixes = [];
-    for (const activity of activities.activities) {
-        if (!activity.artifacts)
-            continue;
-        for (const artifact of activity.artifacts) {
-            if (artifact.path && artifact.contents) {
-                fixes.push({
-                    filePath: artifact.path,
-                    fileContent: artifact.contents,
-                });
-            }
-        }
-    }
-    return fixes;
-};
-exports.sendJulesMessage = sendJulesMessage;
-/**
- * Lists activities in a Jules session.
- */
-const listJulesActivities = async (apiKey, sessionName, pageSize = 30, deps = defaultDependencies) => {
-    const response = await deps.fetch(`${BASE_URL}/${sessionName}/activities?pageSize=${pageSize}`, {
-        headers: getHeaders(apiKey),
-    });
-    return handleResponse(response);
-};
-exports.listJulesActivities = listJulesActivities;
-const summarizeJulesSession = async (apiKey, sessionName, deps = defaultDependencies) => {
-    const activities = await (0, exports.listJulesActivities)(apiKey, sessionName, 20, deps);
-    const signals = new Set();
-    for (const activity of activities.activities) {
-        if (activity.progressUpdated?.title) {
-            signals.add(activity.progressUpdated.title.trim());
-        }
-        if (activity.progressUpdated?.description) {
-            signals.add(activity.progressUpdated.description.trim());
-        }
-        if (activity.planGenerated?.plan.steps) {
-            for (const step of activity.planGenerated.plan.steps) {
-                signals.add(step.title.trim());
-            }
-        }
-    }
-    return {
-        activityCount: activities.activities.length,
-        signals: Array.from(signals)
-            .filter((entry) => entry.length > 0)
-            .slice(0, 5),
-    };
-};
-exports.summarizeJulesSession = summarizeJulesSession;
-/**
- * Terminates a Jules session to free cloud resources.
- */
 const deleteJulesSession = async (apiKey, sessionName, deps = defaultDependencies) => {
     const response = await deps.fetch(`${BASE_URL}/${sessionName}`, {
         method: "DELETE",
@@ -258723,52 +261528,87 @@ exports.sendNotification = sendNotification;
 /***/ }),
 
 /***/ 1816:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getExternalDependencies = exports.isPublicRegistryVersion = exports.isUpdateNeeded = exports.getLatestVersion = void 0;
+exports.getExternalDependencies = exports.isPublicRegistryVersion = exports.isUpdateNeeded = exports.getLatestVersion = exports.clearRegistryCache = void 0;
+const semver_1 = __importDefault(__nccwpck_require__(9419));
 const defaultNpmDependencies = {
     fetch: globalThis.fetch.bind(globalThis),
 };
 /**
- * Fetches the latest version of a package from the public npm registry.
- * Uses native fetch avoiding extra dependencies.
+ * In-memory cache for registry lookups during the current run.
  */
-const getLatestVersion = async (packageName, deps = defaultNpmDependencies) => {
-    const url = `https://registry.npmjs.org/${packageName}`;
-    const response = await deps.fetch(url, {
-        headers: {
-            Accept: "application/vnd.npm.install-v1+json",
-        },
-    });
-    if (!response.ok) {
-        throw new Error("Failed to fetch registry data for package");
-    }
-    const data = (await response.json());
-    return data["dist-tags"].latest;
+let registryCache = new Map();
+/**
+ * Clears the registry cache. Used primarily for testing.
+ */
+const clearRegistryCache = () => {
+    registryCache = new Map();
+};
+exports.clearRegistryCache = clearRegistryCache;
+/**
+ * Fetches the latest version of a package from the public npm registry.
+ * Uses an in-memory cache to prevent redundant network calls.
+ */
+const getLatestVersion = (packageName, deps = defaultNpmDependencies) => {
+    const cached = registryCache.get(packageName);
+    if (cached)
+        return cached;
+    const promise = (async () => {
+        const url = `https://registry.npmjs.org/${packageName}`;
+        const response = await deps.fetch(url, {
+            headers: {
+                Accept: "application/vnd.npm.install-v1+json",
+            },
+        });
+        if (!response.ok) {
+            throw new Error(`Failed to fetch registry data for ${packageName}`);
+        }
+        const data = (await response.json());
+        return data["dist-tags"].latest;
+    })();
+    registryCache.set(packageName, promise);
+    return promise;
 };
 exports.getLatestVersion = getLatestVersion;
 /**
- * Basic pure function check to determine if an update is needed.
- * It strictly ignores existing semver prefixes for safe, naive matching.
+ * Mathematical check to determine if an update is required.
+ * Uses the 'semver' package to handle ranges and prefixes accurately.
  */
 const isUpdateNeeded = (currentVersion, latestVersion) => {
-    const cleanCurrent = currentVersion.replace(/^[\^~]/, "");
-    return cleanCurrent !== latestVersion;
+    try {
+        // Rule 1: Ignore Prereleases. depSync only analyzes stable releases.
+        if (semver_1.default.prerelease(latestVersion)) {
+            return false;
+        }
+        const c = semver_1.default.coerce(currentVersion);
+        const l = semver_1.default.coerce(latestVersion);
+        if (!c || !l) {
+            return currentVersion.replace(/^[\^~]/, "") !== latestVersion;
+        }
+        // Rule 2: Respect the Range. If the latest version safely satisfies the
+        // existing range, we don't treat it as a drift.
+        if (semver_1.default.satisfies(latestVersion, currentVersion)) {
+            return false;
+        }
+        // Only flag a drift if the latest stable version is strictly newer
+        // and falls OUTSIDE the current range.
+        return semver_1.default.gt(l, c);
+    }
+    catch {
+        return currentVersion.replace(/^[\^~]/, "") !== latestVersion;
+    }
 };
 exports.isUpdateNeeded = isUpdateNeeded;
 /**
  * Validates whether a version string is a standard semver range that
  * can be resolved by the public npm registry.
- *
- * Excludes package manager specific protocols like:
- * - workspace:*   (pnpm internal linking)
- * - catalog:      (pnpm multi-workspace version sharing)
- * - npm:          (npm aliases)
- * - file:         (local filesystem paths)
- * - git+          (git repository links)
  */
 const isPublicRegistryVersion = (version) => {
     if (!version)
@@ -258792,17 +261632,13 @@ exports.isPublicRegistryVersion = isPublicRegistryVersion;
  * dependency names that represent external, public-registry packages.
  */
 const getExternalDependencies = (pkg) => {
-    const externalDeps = [];
     const allDeps = {
         ...(pkg.dependencies || {}),
         ...(pkg.devDependencies || {}),
     };
-    for (const [name, version] of Object.entries(allDeps)) {
-        if ((0, exports.isPublicRegistryVersion)(version)) {
-            externalDeps.push(name);
-        }
-    }
-    return externalDeps;
+    return Object.entries(allDeps)
+        .filter(([_, version]) => (0, exports.isPublicRegistryVersion)(version))
+        .map(([name]) => name);
 };
 exports.getExternalDependencies = getExternalDependencies;
 
@@ -258909,7 +261745,10 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.handleFixCommand = void 0;
-const fs = __importStar(__nccwpck_require__(3024));
+const node_crypto_1 = __nccwpck_require__(7598);
+const promises_1 = __nccwpck_require__(1455);
+const node_os_1 = __nccwpck_require__(8161);
+const node_path_1 = __nccwpck_require__(6760);
 const core = __importStar(__nccwpck_require__(6966));
 const github = __importStar(__nccwpck_require__(9512));
 const github_js_1 = __nccwpck_require__(9294);
@@ -258927,10 +261766,36 @@ const notifyStart = async (ctx) => {
         body: "🚀 depSync is rebuilding focused context and generating a Pull Request...",
     });
 };
-const applyFixesToDisk = (fixes) => {
-    for (const fix of fixes) {
-        core.info(`📝 Applying fix to ${fix.filePath}...`);
-        fs.writeFileSync(fix.filePath, fix.fileContent);
+const createPatchFile = async (patch) => {
+    const patchFilePath = (0, node_path_1.join)((0, node_os_1.tmpdir)(), `depsync-${(0, node_crypto_1.randomUUID)()}.patch`);
+    await (0, promises_1.writeFile)(patchFilePath, patch, "utf-8");
+    return patchFilePath;
+};
+const describePatch = (patch, activityName) => {
+    const diffLine = patch
+        .split("\n")
+        .find((line) => line.startsWith("diff --git "));
+    return diffLine ?? activityName;
+};
+const applyPatchArtifactsSequentially = async (_ctx, patches) => {
+    let appliedAnyPatch = false;
+    for (const patchArtifact of patches) {
+        const patchLabel = describePatch(patchArtifact.patch, patchArtifact.activityName);
+        const patchFilePath = await createPatchFile(patchArtifact.patch);
+        try {
+            git_js_1.gitOps.applyPatchFile(patchFilePath, patchLabel);
+            appliedAnyPatch = true;
+        }
+        catch (error) {
+            if (appliedAnyPatch) {
+                git_js_1.gitOps.restoreWorkingTree();
+            }
+            const message = error instanceof Error ? error.message : String(error);
+            throw new git_js_1.GitPatchApplyError(patchLabel, `Patch ${patchLabel} from ${patchArtifact.activityName} failed: ${message}`);
+        }
+        finally {
+            await (0, promises_1.rm)(patchFilePath, { force: true });
+        }
     }
 };
 const pushFixesToGithub = async (ctx, branchName) => {
@@ -258989,14 +261854,14 @@ const handleFixCommand = async (githubToken, julesApiKey, issueBody, issueNumber
         await notifyStart(context);
         const issueContext = (0, issue_context_js_1.parseIssueContext)(issueBody);
         const drift = await (0, orchestrator_js_1.rebuildDriftFromIssueContext)(issueContext, githubToken, coreFrameworks);
-        const session = await (0, jules_js_1.createJulesFixSession)(julesApiKey, context.repo.owner, context.repo.repo, drift);
+        const source = await (0, jules_js_1.resolveJulesSource)(julesApiKey, context.repo.owner, context.repo.repo);
+        const session = await (0, jules_js_1.createJulesFixSession)(julesApiKey, source, drift);
         sessionName = session.name;
-        const fixes = await (0, jules_js_1.sendJulesMessage)(julesApiKey, session.name, "Generate the code changes required for this migration.");
-        if (fixes.length === 0) {
-            throw new Error("Jules AI did not return any file fixes.");
-        }
+        await (0, jules_js_1.waitForJulesSession)(julesApiKey, session.name);
+        const activities = await (0, jules_js_1.listAllJulesActivities)(julesApiKey, session.name);
+        const patches = (0, jules_js_1.extractPatchArtifacts)(session.name, activities);
+        await applyPatchArtifactsSequentially(context, patches);
         const branchName = `depsync/fix-issue-${issueNumber}`;
-        applyFixesToDisk(fixes);
         await pushFixesToGithub(context, branchName);
         await createFixPullRequest(context, branchName);
     }
@@ -259466,13 +262331,16 @@ const analyzeDependencyUsage = async (dependencyName, latestVersion, usages, fil
             if (packagePayload.usages.length > 0) {
                 payloads.push(packagePayload);
             }
+            // Aggressive memory cleanup: remove all source files from the project instance
+            // to free up ts-morph node memory before processing the next package.
             for (const sourceFile of project.getSourceFiles()) {
                 project.removeSourceFile(sourceFile);
             }
         }
     }
     finally {
-        // ts-morph releases removed source files without requiring explicit disposal.
+        // No-op - ts-morph Project doesn't require explicit disposal,
+        // and we've already cleared source files in the loop.
     }
     const usageCount = payloads.reduce((total, payload) => total +
         payload.usages.reduce((usageTotal, usage) => usageTotal + usage.usages.length, 0), 0);
@@ -259599,13 +262467,17 @@ exports.rebuildDriftFromIssueContext = rebuildDriftFromIssueContext;
 /***/ }),
 
 /***/ 1890:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.buildAffectedSourceFilePointers = exports.buildAffectedPackagePointers = exports.calculateRiskLevel = exports.getUpdateType = exports.buildPackagePayload = exports.buildDependencyMap = exports.extractServiceDescription = exports.calculateDriftWeight = void 0;
 const node_path_1 = __nccwpck_require__(6760);
+const semver_1 = __importDefault(__nccwpck_require__(9419));
 const npm_js_1 = __nccwpck_require__(1816);
 const drift_js_1 = __nccwpck_require__(7835);
 const getSemverWeight = (updateType) => {
@@ -259620,8 +262492,6 @@ const getSemverWeight = (updateType) => {
 };
 /**
  * Calculates a priority weight where higher is higher priority.
- * The framework bonus is intentionally smaller than the semver step so
- * framework minors never outrank non-framework majors.
  */
 const calculateDriftWeight = (packageName, updateType, coreFrameworks, astUsageCount = 0) => {
     let score = getSemverWeight(updateType);
@@ -259697,16 +262567,27 @@ const buildPackagePayload = (packageJsonPath, pkg, dependencyName, currentVersio
 };
 exports.buildPackagePayload = buildPackagePayload;
 /**
- * Simple semver-ish update type detector.
+ * Detects the update type (MAJOR, MINOR, PATCH) using the semver package.
  */
 const getUpdateType = (current, latest) => {
-    const c = current.replace(/^[\^~]/, "").split(".");
-    const l = latest.split(".");
-    if (c[0] !== l[0])
-        return drift_js_1.UpdateType.MAJOR;
-    if (c[1] !== l[1])
-        return drift_js_1.UpdateType.MINOR;
-    return drift_js_1.UpdateType.PATCH;
+    try {
+        const c = semver_1.default.coerce(current);
+        const l = semver_1.default.coerce(latest);
+        if (!c || !l)
+            return drift_js_1.UpdateType.PATCH;
+        const diff = semver_1.default.diff(c, l);
+        switch (diff) {
+            case "major":
+                return drift_js_1.UpdateType.MAJOR;
+            case "minor":
+                return drift_js_1.UpdateType.MINOR;
+            default:
+                return drift_js_1.UpdateType.PATCH;
+        }
+    }
+    catch {
+        return drift_js_1.UpdateType.PATCH;
+    }
 };
 exports.getUpdateType = getUpdateType;
 const calculateRiskLevel = (updateType, affectedPackageCount, usageCount) => {
@@ -260040,31 +262921,74 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.gitOps = void 0;
+exports.gitOps = exports.GitPatchApplyError = void 0;
 const node_child_process_1 = __nccwpck_require__(1421);
 const core = __importStar(__nccwpck_require__(6966));
+class GitPatchApplyError extends Error {
+    patchLabel;
+    constructor(patchLabel, message) {
+        super(message);
+        this.name = "GitPatchApplyError";
+        this.patchLabel = patchLabel;
+    }
+}
+exports.GitPatchApplyError = GitPatchApplyError;
+/**
+ * Execute a git command using spawnSync with array-based arguments for maximum security.
+ * Throws an error with stderr output if the command fails.
+ */
+const runGit = (args, _options = {}) => {
+    const result = (0, node_child_process_1.spawnSync)("git", args, {
+        encoding: "utf-8",
+        shell: false,
+    });
+    if (result.status !== 0) {
+        const message = result.stderr?.trim() || `Git command failed: git ${args.join(" ")}`;
+        throw new Error(message);
+    }
+    return result.stdout || "";
+};
 /**
  * Clean wrapper for Git operations to decouple from shell execution.
+ * Uses spawnSync internally with strict array arguments to prevent command injection.
  */
 exports.gitOps = {
     configureUser: (name = "depSync Bot", email = "bot@depsync.ai") => {
         core.info(`🔧 Configuring Git user: ${name} <${email}>`);
-        (0, node_child_process_1.execSync)(`git config user.name "${name}"`);
-        (0, node_child_process_1.execSync)(`git config user.email "${email}"`);
+        runGit(["config", "user.name", name]);
+        runGit(["config", "user.email", email]);
     },
     createBranch: (branchName) => {
         core.info(`🌿 Creating branch ${branchName}...`);
-        (0, node_child_process_1.execSync)(`git checkout -b ${branchName}`);
+        runGit(["checkout", "-b", branchName]);
     },
     commitAll: (message) => {
         core.info("💾 Committing changes...");
-        (0, node_child_process_1.execSync)("git add .");
-        (0, node_child_process_1.execSync)(`git commit -m "${message}"`);
+        runGit(["add", "."]);
+        runGit(["commit", "-m", message]);
+    },
+    applyPatchFile: (patchFilePath, patchLabel) => {
+        core.info(`🩹 Applying patch ${patchLabel}...`);
+        try {
+            runGit(["apply", "--whitespace=fix", patchFilePath]);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            throw new GitPatchApplyError(patchLabel, `Failed to apply patch ${patchLabel}: ${message}`);
+        }
+    },
+    restoreWorkingTree: () => {
+        core.info("♻️ Restoring clean working tree...");
+        runGit(["reset", "--hard"]);
+        runGit(["clean", "-fd"]);
     },
     push: (remoteUrl, branchName, force = false) => {
         core.info(`⬆️ Pushing changes to ${branchName}...`);
-        const forceFlag = force ? " --force" : "";
-        (0, node_child_process_1.execSync)(`git push "${remoteUrl}" ${branchName}${forceFlag}`);
+        const args = ["push", remoteUrl, branchName];
+        if (force) {
+            args.push("--force");
+        }
+        runGit(args);
     },
 };
 
@@ -260293,32 +263217,14 @@ const summarizeReleaseNotes = (releaseNotes) => {
         .find((line) => line.length > 0);
     return candidate ? candidate.slice(0, 180) : null;
 };
-const buildIssueAnalysis = async (julesApiKey, sessionName, drift) => {
-    const sessionSummary = await (0, jules_js_1.summarizeJulesSession)(julesApiKey, sessionName).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        core.warning(`Could not summarize Jules session ${sessionName}: ${message}`);
-        return { activityCount: 0, signals: [] };
-    });
-    const riskLevel = (0, orchestrator_utils_js_1.calculateRiskLevel)(drift.updateType, drift.affectedPackages.length, drift.usageCount);
+const buildFallbackAnalysisMarkdown = (drift) => {
     const releaseNotesSummary = summarizeReleaseNotes(drift.releaseNotes);
-    const issueSummary = `${drift.dependencyName} affects ${drift.affectedPackages.length} package(s) across ${drift.affectedSourceFiles.length} file(s) with ${riskLevel} migration risk.`;
-    const julesSignals = sessionSummary.signals.length
-        ? sessionSummary.signals.map((signal) => `- ${signal}`).join("\n")
-        : "- Jules returned no structured progress text for this short-lived session.";
+    const riskLevel = (0, orchestrator_utils_js_1.calculateRiskLevel)(drift.updateType, drift.affectedPackages.length, drift.usageCount);
     const releaseNotesSection = releaseNotesSummary
         ? `### Release Notes Signal\n- ${releaseNotesSummary}`
         : `### Release Notes Signal\n- No release notes were available for \`${drift.latestVersion}\`.`;
-    return {
-        riskLevel,
-        issueSummary,
-        executionMetadata: {
-            generatedAt: new Date().toISOString(),
-            affectedFileCount: drift.affectedSourceFiles.length,
-            affectedPackageCount: drift.affectedPackages.length,
-            julesActivityCount: sessionSummary.activityCount,
-        },
-        markdown: `### Summary
-${issueSummary}
+    return `### Summary
+${drift.dependencyName} affects ${drift.affectedPackages.length} package(s) across ${drift.affectedSourceFiles.length} file(s).
 
 ### Risk
 - This update is classified as **${riskLevel}** risk based on semver impact and AST footprint.
@@ -260326,13 +263232,52 @@ ${issueSummary}
 
 ${releaseNotesSection}
 
-### Jules Signals
-${julesSignals}
-
 ### Recommended Migration Focus
 - Start with the affected files already captured in this issue context.
-- Validate exported APIs before merging if any downstream signature changes are required.`,
+- Validate exported APIs before merging if any downstream signature changes are required.`;
+};
+const buildIssueAnalysis = (drift, analysisMarkdown, activityCount) => {
+    const riskLevel = (0, orchestrator_utils_js_1.calculateRiskLevel)(drift.updateType, drift.affectedPackages.length, drift.usageCount);
+    const issueSummary = `${drift.dependencyName} affects ${drift.affectedPackages.length} package(s) across ${drift.affectedSourceFiles.length} file(s) with ${riskLevel} migration risk.`;
+    return {
+        riskLevel,
+        issueSummary,
+        executionMetadata: {
+            generatedAt: new Date().toISOString(),
+            affectedFileCount: drift.affectedSourceFiles.length,
+            affectedPackageCount: drift.affectedPackages.length,
+            julesActivityCount: activityCount,
+        },
+        markdown: analysisMarkdown ?? buildFallbackAnalysisMarkdown(drift),
     };
+};
+const processDrift = async (githubToken, julesApiKey, drift, source) => {
+    let sessionName;
+    try {
+        core.info(`🤖 Opening Jules analysis session for ${drift.dependencyName}...`);
+        const session = await (0, jules_js_1.createJulesAnalysisSession)(julesApiKey, source, drift);
+        sessionName = session.name;
+        await (0, jules_js_1.waitForJulesSession)(julesApiKey, session.name);
+        const sessionSummary = await (0, jules_js_1.summarizeJulesSession)(julesApiKey, session.name);
+        const analysis = buildIssueAnalysis(drift, sessionSummary.analysisMarkdown, sessionSummary.activityCount);
+        core.info(`📅 Opening GitHub issue for ${drift.dependencyName}...`);
+        const issue = await (0, github_js_1.reportDriftAsIssue)(githubToken, drift, analysis);
+        core.info(`✔ Successfully processed ${drift.dependencyName}.`);
+        return {
+            packageName: drift.dependencyName,
+            riskLevel: analysis.riskLevel,
+            issueUrl: issue.url,
+            summary: analysis.issueSummary,
+        };
+    }
+    finally {
+        if (sessionName) {
+            await (0, jules_js_1.deleteJulesSession)(julesApiKey, sessionName).catch((error) => {
+                const message = error instanceof Error ? error.message : String(error);
+                core.warning(`Failed to clean up Jules session ${sessionName}: ${message}`);
+            });
+        }
+    }
 };
 const handleScanWorkflow = async (githubToken, julesApiKey, notificationWebhookUrl, notificationWebhookSecret, workspaceRoot, coreFrameworks) => {
     core.info(`🚀 depSync: Starting monorepo analysis...`);
@@ -260343,36 +263288,18 @@ const handleScanWorkflow = async (githubToken, julesApiKey, notificationWebhookU
     }
     core.info(`🔍 Found ${drifts.length} prioritized dependency drifts.`);
     const { owner, repo } = github.context.repo;
+    const source = await (0, jules_js_1.resolveJulesSource)(julesApiKey, owner, repo);
+    const settledResults = await Promise.allSettled(drifts.map((drift) => processDrift(githubToken, julesApiKey, drift, source)));
     const notificationDigest = [];
-    for (const drift of drifts) {
-        let sessionName;
-        try {
-            core.info(`🤖 Opening Jules analysis session for ${drift.dependencyName}...`);
-            const session = await (0, jules_js_1.createJulesAnalysisSession)(julesApiKey, owner, repo, drift);
-            sessionName = session.name;
-            const analysis = await buildIssueAnalysis(julesApiKey, session.name, drift);
-            core.info(`📅 Opening GitHub issue for ${drift.dependencyName}...`);
-            const issue = await (0, github_js_1.reportDriftAsIssue)(githubToken, drift, analysis);
-            notificationDigest.push({
-                packageName: drift.dependencyName,
-                riskLevel: analysis.riskLevel,
-                issueUrl: issue.url,
-                summary: analysis.issueSummary,
-            });
-            core.info(`✔ Successfully processed ${drift.dependencyName}.`);
+    for (const result of settledResults) {
+        if (result.status === "fulfilled") {
+            notificationDigest.push(result.value);
+            continue;
         }
-        catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            core.error(`❌ Failed processing ${drift.dependencyName}: ${message}`);
-        }
-        finally {
-            if (sessionName) {
-                await (0, jules_js_1.deleteJulesSession)(julesApiKey, sessionName).catch((error) => {
-                    const message = error instanceof Error ? error.message : String(error);
-                    core.warning(`Failed to clean up Jules session ${sessionName}: ${message}`);
-                });
-            }
-        }
+        const message = result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason);
+        core.error(`❌ Failed processing drift worker: ${message}`);
     }
     await (0, notifier_js_1.sendNotification)(notificationWebhookUrl, notificationWebhookSecret, {
         repository: `${owner}/${repo}`,

@@ -3,7 +3,9 @@ import { reportDriftAsIssue } from "../../clients/github.js";
 import {
 	createJulesAnalysisSession,
 	deleteJulesSession,
+	resolveJulesSource,
 	summarizeJulesSession,
+	waitForJulesSession,
 } from "../../clients/jules.js";
 import { sendNotification } from "../../clients/notifier.js";
 import { analyzeMonorepoDrift } from "../../core/orchestrator/orchestrator.js";
@@ -23,9 +25,15 @@ vi.mock("../../clients/github.js", () => ({
 vi.mock("../../clients/jules.js", () => ({
 	createJulesAnalysisSession: vi.fn().mockResolvedValue({ name: "sessions/1" }),
 	deleteJulesSession: vi.fn().mockResolvedValue(undefined),
-	summarizeJulesSession: vi
-		.fn()
-		.mockResolvedValue({ activityCount: 1, signals: ["Scanning footprint"] }),
+	resolveJulesSource: vi.fn().mockResolvedValue({
+		sourceName: "sources/github-owner-repo",
+		defaultBranch: "main",
+	}),
+	summarizeJulesSession: vi.fn().mockResolvedValue({
+		activityCount: 1,
+		analysisMarkdown: "### Summary\nLooks good",
+	}),
+	waitForJulesSession: vi.fn().mockResolvedValue({ state: "COMPLETED" }),
 }));
 vi.mock("../../clients/notifier.js", () => ({
 	sendNotification: vi.fn().mockResolvedValue(undefined),
@@ -72,19 +80,19 @@ describe("handleScanWorkflow", () => {
 					currentVersion: "18.0.0",
 					latestVersion: "19.0.0",
 				},
-				usages: [
-					{
-						file: "/workspace/apps/web/src/index.tsx",
-						importStatement: "import React from 'react';",
-						usages: [],
-					},
-				],
+				usages: [],
 			},
 		],
-	} as any;
+	} as const;
 
-	it("deletes scan-time Jules sessions after successful issue creation", async () => {
-		vi.mocked(analyzeMonorepoDrift).mockResolvedValue([drift]);
+	it("resolves the source once and processes drifts concurrently", async () => {
+		vi.mocked(analyzeMonorepoDrift).mockResolvedValue([
+			drift,
+			{ ...drift, dependencyName: "vitest" } as any,
+		]);
+		vi.mocked(createJulesAnalysisSession)
+			.mockResolvedValueOnce({ name: "sessions/1" } as any)
+			.mockResolvedValueOnce({ name: "sessions/2" } as any);
 
 		await handleScanWorkflow(
 			"gh-token",
@@ -95,17 +103,24 @@ describe("handleScanWorkflow", () => {
 			new Set(["react"]),
 		);
 
-		expect(createJulesAnalysisSession).toHaveBeenCalled();
-		expect(reportDriftAsIssue).toHaveBeenCalled();
-		expect(deleteJulesSession).toHaveBeenCalledWith("jules-key", "sessions/1");
+		expect(resolveJulesSource).toHaveBeenCalledTimes(1);
+		expect(createJulesAnalysisSession).toHaveBeenCalledTimes(2);
+		expect(waitForJulesSession).toHaveBeenCalledTimes(2);
+		expect(summarizeJulesSession).toHaveBeenCalledTimes(2);
 		expect(sendNotification).toHaveBeenCalled();
 	});
 
-	it("deletes scan-time Jules sessions even if issue creation fails", async () => {
-		vi.mocked(analyzeMonorepoDrift).mockResolvedValue([drift]);
-		vi.mocked(reportDriftAsIssue).mockRejectedValueOnce(
-			new Error("GitHub failed"),
-		);
+	it("deletes each session even when one worker fails", async () => {
+		vi.mocked(analyzeMonorepoDrift).mockResolvedValue([
+			drift,
+			{ ...drift, dependencyName: "vitest" } as any,
+		]);
+		vi.mocked(createJulesAnalysisSession)
+			.mockResolvedValueOnce({ name: "sessions/1" } as any)
+			.mockResolvedValueOnce({ name: "sessions/2" } as any);
+		vi.mocked(reportDriftAsIssue)
+			.mockResolvedValueOnce({ number: 1, url: "issue-url-1" })
+			.mockRejectedValueOnce(new Error("GitHub failed"));
 
 		await handleScanWorkflow(
 			"gh-token",
@@ -116,7 +131,7 @@ describe("handleScanWorkflow", () => {
 			new Set(["react"]),
 		);
 
-		expect(summarizeJulesSession).toHaveBeenCalled();
 		expect(deleteJulesSession).toHaveBeenCalledWith("jules-key", "sessions/1");
+		expect(deleteJulesSession).toHaveBeenCalledWith("jules-key", "sessions/2");
 	});
 });
