@@ -385,7 +385,11 @@ const toSafeWarningDetails = (error: unknown): string => {
 	if (/\b504\b/.test(normalized)) return "HTTP 504";
 	if (/\b(cloning|clone)\b/.test(normalized)) return "repo cloning failure";
 	if (/\b(timeout|timed out)\b/.test(normalized)) return "network timeout";
-	if (/\b(connection|socket|fetch failed|econnreset|enotfound|eai_again)\b/.test(normalized)) {
+	if (
+		/\b(connection|socket|fetch failed|econnreset|enotfound|eai_again)\b/.test(
+			normalized,
+		)
+	) {
 		return "network failure";
 	}
 
@@ -395,11 +399,15 @@ const toSafeWarningDetails = (error: unknown): string => {
 const isTransientInfrastructureError = (error: unknown): boolean => {
 	if (error instanceof JulesSessionStatusError) {
 		const candidate = error.failureReason ?? error.message;
-		return error.state === "FAILED" && isTransientInfrastructureMessage(candidate);
+		return (
+			error.state === "FAILED" && isTransientInfrastructureMessage(candidate)
+		);
 	}
 
 	if (error instanceof JulesApiError) {
-		return error.status >= 500 || isTransientInfrastructureMessage(error.message);
+		return (
+			error.status >= 500 || isTransientInfrastructureMessage(error.message)
+		);
 	}
 
 	if (error instanceof Error) {

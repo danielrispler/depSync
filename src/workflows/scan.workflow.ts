@@ -91,10 +91,8 @@ const processDrift = async (
 		core.info(
 			`🤖 Opening Jules analysis session for ${drift.dependencyName}...`,
 		);
-		const session = await runJulesSessionWithRetry(
-			julesApiKey,
-			(deps) =>
-				createJulesAnalysisSession(julesApiKey, source, drift, deps),
+		const session = await runJulesSessionWithRetry(julesApiKey, (deps) =>
+			createJulesAnalysisSession(julesApiKey, source, drift, deps),
 		);
 		sessionName = session.name;
 

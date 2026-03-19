@@ -189,9 +189,8 @@ export const handleFixCommand = async (
 			context.repo.repo,
 		);
 
-		const session = await runJulesSessionWithRetry(
-			julesApiKey,
-			(deps) => createJulesFixSession(julesApiKey, source, drift, deps),
+		const session = await runJulesSessionWithRetry(julesApiKey, (deps) =>
+			createJulesFixSession(julesApiKey, source, drift, deps),
 		);
 		sessionName = session.name;
 

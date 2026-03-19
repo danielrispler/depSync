@@ -101,7 +101,9 @@ describe("handleFixCommand", () => {
 		vi.mocked(gitOps.regenerateLockfile).mockImplementation(() => undefined);
 		vi.mocked(runJulesSessionWithRetry).mockImplementation(
 			async (_apiKey, createSessionAttempt) =>
-				createSessionAttempt({ fetch: globalThis.fetch.bind(globalThis) } as any),
+				createSessionAttempt({
+					fetch: globalThis.fetch.bind(globalThis),
+				} as any),
 		);
 	});
 

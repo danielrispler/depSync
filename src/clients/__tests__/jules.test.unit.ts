@@ -318,7 +318,8 @@ describe("Jules API Client", () => {
 
 		const sessionPromise = runJulesSessionWithRetry(
 			mockApiKey,
-			(deps) => createJulesFixSession(mockApiKey, resolvedSource, mockDrift, deps),
+			(deps) =>
+				createJulesFixSession(mockApiKey, resolvedSource, mockDrift, deps),
 			{ fetch: mockFetch as any },
 		);
 
@@ -432,7 +433,8 @@ describe("Jules API Client", () => {
 
 		const sessionPromise = runJulesSessionWithRetry(
 			mockApiKey,
-			(deps) => createJulesFixSession(mockApiKey, resolvedSource, mockDrift, deps),
+			(deps) =>
+				createJulesFixSession(mockApiKey, resolvedSource, mockDrift, deps),
 			{ fetch: mockFetch as any },
 		);
 		const rejection = expect(sessionPromise).rejects.toThrow(/502/);
