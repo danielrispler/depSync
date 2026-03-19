@@ -261949,15 +261949,17 @@ const handleFailure = async (ctx, message) => {
         body: `❌ **Failed to generate PR**: ${message}`,
     });
 };
-const cleanup = async (julesApiKey, sessionName) => {
-    if (!sessionName)
-        return;
-    core.info("🧹 Cleaning up Jules session...");
-    await (0, jules_js_1.deleteJulesSession)(julesApiKey, sessionName).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        core.warning(`Cleanup failed: ${message}`);
-    });
-};
+// const cleanup = async (
+// 	julesApiKey: string,
+// 	sessionName: string | undefined,
+// ): Promise<void> => {
+// 	if (!sessionName) return;
+// 	core.info("🧹 Cleaning up Jules session...");
+// 	await deleteJulesSession(julesApiKey, sessionName).catch((error) => {
+// 		const message = error instanceof Error ? error.message : String(error);
+// 		core.warning(`Cleanup failed: ${message}`);
+// 	});
+// };
 const handleFixCommand = async (githubToken, julesApiKey, issueBody, issueNumber, commentId, coreFrameworks) => {
     const context = {
         githubToken,
@@ -261969,14 +261971,16 @@ const handleFixCommand = async (githubToken, julesApiKey, issueBody, issueNumber
         repo: github.context.repo,
         coreFrameworks,
     };
-    let sessionName;
+    // let sessionName: string | undefined;
     try {
         await notifyStart(context);
         const issueContext = (0, issue_context_js_1.parseIssueContext)(issueBody);
         const drift = await (0, orchestrator_js_1.rebuildDriftFromIssueContext)(issueContext, githubToken, coreFrameworks);
         const source = await (0, jules_js_1.resolveJulesSource)(julesApiKey, context.repo.owner, context.repo.repo);
         const session = await (0, jules_js_1.runJulesSessionWithRetry)(julesApiKey, (deps) => (0, jules_js_1.createJulesFixSession)(julesApiKey, source, drift, deps));
-        sessionName = session.name;
+        // sessionName = session.name;
+        const sessionId = session.name.replace("sessions/", "");
+        console.log(`\n🔍 Direct Jules UI Link for Debugging: https://jules.google.com/session/${sessionId}\n`);
         const activities = await (0, jules_js_1.listAllJulesActivities)(julesApiKey, session.name);
         const patches = (0, jules_js_1.extractPatchArtifacts)(session.name, activities);
         await applyPatchArtifactsSequentially(context, patches);
@@ -261989,7 +261993,7 @@ const handleFixCommand = async (githubToken, julesApiKey, issueBody, issueNumber
         await handleFailure(context, message);
     }
     finally {
-        await cleanup(julesApiKey, sessionName);
+        // await cleanup(julesApiKey, sessionName);
     }
 };
 exports.handleFixCommand = handleFixCommand;
