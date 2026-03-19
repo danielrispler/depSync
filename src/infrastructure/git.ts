@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import * as core from "@actions/core";
 
 export class GitPatchApplyError extends Error {
@@ -33,6 +34,46 @@ const runGit = (
 	return result.stdout || "";
 };
 
+const runCommand = (command: string, args: string[]): string => {
+	const result = spawnSync(command, args, {
+		cwd: process.cwd(),
+		encoding: "utf-8",
+		shell: false,
+	});
+
+	if (result.error) {
+		throw result.error;
+	}
+
+	if (result.status !== 0) {
+		const message =
+			result.stderr?.trim() ||
+			`${command} command failed: ${command} ${args.join(" ")}`;
+		throw new Error(message);
+	}
+
+	return result.stdout || "";
+};
+
+const getPreferredPackageManager = (): "pnpm" | "npm" => {
+	if (existsSync("pnpm-lock.yaml")) {
+		return "pnpm";
+	}
+
+	if (!existsSync("package.json")) {
+		return "npm";
+	}
+
+	try {
+		const packageJson = JSON.parse(readFileSync("package.json", "utf-8")) as {
+			packageManager?: string;
+		};
+		return packageJson.packageManager?.startsWith("pnpm@") ? "pnpm" : "npm";
+	} catch {
+		return "npm";
+	}
+};
+
 /**
  * Clean wrapper for Git operations to decouple from shell execution.
  * Uses spawnSync internally with strict array arguments to prevent command injection.
@@ -59,9 +100,15 @@ export const gitOps = {
 	},
 
 	applyPatchFile: (patchFilePath: string, patchLabel: string): void => {
-		core.info(`🩹 Applying patch ${patchLabel}...`);
+		core.info(`🩹 Applying patch ${patchLabel} with GNU patch...`);
 		try {
-			runGit(["apply", "--whitespace=fix", patchFilePath]);
+			runCommand("patch", [
+				"-p1",
+				"--no-backup-if-mismatch",
+				"--fuzz=3",
+				"-i",
+				patchFilePath,
+			]);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new GitPatchApplyError(
@@ -69,6 +116,19 @@ export const gitOps = {
 				`Failed to apply patch ${patchLabel}: ${message}`,
 			);
 		}
+	},
+
+	regenerateLockfile: (): void => {
+		const packageManager = getPreferredPackageManager();
+		const args =
+			packageManager === "pnpm"
+				? ["install", "--no-frozen-lockfile"]
+				: ["install"];
+
+		core.info(
+			`📦 Regenerating lockfile with ${packageManager} ${args.join(" ")}...`,
+		);
+		runCommand(packageManager, args);
 	},
 
 	restoreWorkingTree: (): void => {

@@ -79,6 +79,7 @@ vi.mock("../../infrastructure/git.js", () => ({
 		createBranch: vi.fn(),
 		commitAll: vi.fn(),
 		push: vi.fn(),
+		regenerateLockfile: vi.fn(),
 		restoreWorkingTree: vi.fn(),
 	},
 }));
@@ -94,6 +95,8 @@ describe("handleFixCommand", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.mocked(gitOps.applyPatchFile).mockImplementation(() => undefined);
+		vi.mocked(gitOps.regenerateLockfile).mockImplementation(() => undefined);
 	});
 
 	it("applies patch artifacts, creates a PR, and cleans up the session on success", async () => {
@@ -113,6 +116,7 @@ describe("handleFixCommand", () => {
 		expect(listAllJulesActivities).toHaveBeenCalled();
 		expect(extractPatchArtifacts).toHaveBeenCalled();
 		expect(gitOps.applyPatchFile).toHaveBeenCalled();
+		expect(gitOps.regenerateLockfile).toHaveBeenCalled();
 		expect(gitOps.push).toHaveBeenCalled();
 		expect(deleteJulesSession).toHaveBeenCalledWith(
 			mockJulesApiKey,
@@ -144,6 +148,27 @@ describe("handleFixCommand", () => {
 		expect(deleteJulesSession).toHaveBeenCalledWith(
 			mockJulesApiKey,
 			"sessions/fix-123",
+		);
+	});
+
+	it("restores the working tree and comments on lockfile regeneration failure", async () => {
+		vi.mocked(gitOps.regenerateLockfile).mockImplementation(() => {
+			throw new Error("pnpm install failed");
+		});
+
+		await handleFixCommand(
+			mockGithubToken,
+			mockJulesApiKey,
+			mockIssueBody,
+			mockIssueNumber,
+			mockCommentId,
+			coreFrameworks,
+		);
+
+		expect(gitOps.applyPatchFile).toHaveBeenCalled();
+		expect(gitOps.restoreWorkingTree).toHaveBeenCalled();
+		expect(core.error).toHaveBeenCalledWith(
+			expect.stringContaining("Failed to regenerate lockfile"),
 		);
 	});
 

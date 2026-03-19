@@ -14,6 +14,9 @@ describe("payload generator", () => {
 		expect(result.usages).toEqual([]);
 		expect(result.releaseNotes).toBeNull();
 		expect(result.instruction).toContain("expert migration assistant");
+		expect(result.instruction).toContain(
+			"CRITICAL: DO NOT modify pnpm-lock.yaml or any lockfiles.",
+		);
 	});
 
 	it("should correctly map complex payloads into flattened ProcessedUsages with service context", () => {

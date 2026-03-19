@@ -51,7 +51,8 @@ Rules:
 1. Generate the exact code changes needed to safely migrate the codebase.
 2. Prioritize correctness over breadth; only touch files that require changes.
 3. If an exported function signature would need to change, treat that as high risk and explain it clearly.
-4. Return actionable implementation output suitable for downstream file patch application.`;
+4. Return actionable implementation output suitable for downstream file patch application.
+5. CRITICAL: DO NOT modify pnpm-lock.yaml or any lockfiles. You must only modify package.json and the relevant source files.`;
 
 const toProcessedUsages = (
 	payloads: ReadonlyArray<GeminiPromptPayload>,

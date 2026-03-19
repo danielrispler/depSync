@@ -82,6 +82,18 @@ const applyPatchArtifactsSequentially = async (
 			await rm(patchFilePath, { force: true });
 		}
 	}
+
+	if (!appliedAnyPatch) {
+		return;
+	}
+
+	try {
+		gitOps.regenerateLockfile();
+	} catch (error) {
+		gitOps.restoreWorkingTree();
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Failed to regenerate lockfile: ${message}`);
+	}
 };
 
 const pushFixesToGithub = async (

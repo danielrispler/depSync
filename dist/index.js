@@ -261797,6 +261797,17 @@ const applyPatchArtifactsSequentially = async (_ctx, patches) => {
             await (0, promises_1.rm)(patchFilePath, { force: true });
         }
     }
+    if (!appliedAnyPatch) {
+        return;
+    }
+    try {
+        git_js_1.gitOps.regenerateLockfile();
+    }
+    catch (error) {
+        git_js_1.gitOps.restoreWorkingTree();
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to regenerate lockfile: ${message}`);
+    }
 };
 const pushFixesToGithub = async (ctx, branchName) => {
     const { githubToken, repo } = ctx;
@@ -262674,7 +262685,8 @@ Rules:
 1. Generate the exact code changes needed to safely migrate the codebase.
 2. Prioritize correctness over breadth; only touch files that require changes.
 3. If an exported function signature would need to change, treat that as high risk and explain it clearly.
-4. Return actionable implementation output suitable for downstream file patch application.`;
+4. Return actionable implementation output suitable for downstream file patch application.
+5. CRITICAL: DO NOT modify pnpm-lock.yaml or any lockfiles. You must only modify package.json and the relevant source files.`;
 const toProcessedUsages = (payloads) => payloads.flatMap((payload) => payload.usages.flatMap((usage) => usage.usages.map((ctx) => ({
     serviceName: payload.package.packageName,
     serviceDescription: payload.package.serviceDescription,
@@ -262953,6 +262965,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.gitOps = exports.GitPatchApplyError = void 0;
 const node_child_process_1 = __nccwpck_require__(1421);
+const node_fs_1 = __nccwpck_require__(3024);
 const core = __importStar(__nccwpck_require__(6966));
 class GitPatchApplyError extends Error {
     patchLabel;
@@ -262978,6 +262991,37 @@ const runGit = (args, _options = {}) => {
     }
     return result.stdout || "";
 };
+const runCommand = (command, args) => {
+    const result = (0, node_child_process_1.spawnSync)(command, args, {
+        cwd: process.cwd(),
+        encoding: "utf-8",
+        shell: false,
+    });
+    if (result.error) {
+        throw result.error;
+    }
+    if (result.status !== 0) {
+        const message = result.stderr?.trim() ||
+            `${command} command failed: ${command} ${args.join(" ")}`;
+        throw new Error(message);
+    }
+    return result.stdout || "";
+};
+const getPreferredPackageManager = () => {
+    if ((0, node_fs_1.existsSync)("pnpm-lock.yaml")) {
+        return "pnpm";
+    }
+    if (!(0, node_fs_1.existsSync)("package.json")) {
+        return "npm";
+    }
+    try {
+        const packageJson = JSON.parse((0, node_fs_1.readFileSync)("package.json", "utf-8"));
+        return packageJson.packageManager?.startsWith("pnpm@") ? "pnpm" : "npm";
+    }
+    catch {
+        return "npm";
+    }
+};
 /**
  * Clean wrapper for Git operations to decouple from shell execution.
  * Uses spawnSync internally with strict array arguments to prevent command injection.
@@ -262998,14 +263042,28 @@ exports.gitOps = {
         runGit(["commit", "-m", message]);
     },
     applyPatchFile: (patchFilePath, patchLabel) => {
-        core.info(`🩹 Applying patch ${patchLabel}...`);
+        core.info(`🩹 Applying patch ${patchLabel} with GNU patch...`);
         try {
-            runGit(["apply", "--whitespace=fix", patchFilePath]);
+            runCommand("patch", [
+                "-p1",
+                "--no-backup-if-mismatch",
+                "--fuzz=3",
+                "-i",
+                patchFilePath,
+            ]);
         }
         catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             throw new GitPatchApplyError(patchLabel, `Failed to apply patch ${patchLabel}: ${message}`);
         }
+    },
+    regenerateLockfile: () => {
+        const packageManager = getPreferredPackageManager();
+        const args = packageManager === "pnpm"
+            ? ["install", "--no-frozen-lockfile"]
+            : ["install"];
+        core.info(`📦 Regenerating lockfile with ${packageManager} ${args.join(" ")}...`);
+        runCommand(packageManager, args);
     },
     restoreWorkingTree: () => {
         core.info("♻️ Restoring clean working tree...");

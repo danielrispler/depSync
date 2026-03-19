@@ -143,6 +143,9 @@ describe("Jules API Client", () => {
 		const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
 		expect(requestBody.automationMode).toBe("AUTOMATION_MODE_UNSPECIFIED");
 		expect(requestBody.sourceContext.source).toBe("sources/github-owner-repo");
+		expect(requestBody.prompt).toContain(
+			"CRITICAL: DO NOT modify pnpm-lock.yaml or any lockfiles.",
+		);
 	});
 
 	it("gets a session by name", async () => {
