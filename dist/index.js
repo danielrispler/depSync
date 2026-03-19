@@ -261227,7 +261227,7 @@ const BASE_URL = "https://jules.googleapis.com/v1alpha";
 const DEFAULT_PAGE_SIZE = 100;
 const INITIAL_POLL_DELAY_MS = 5_000;
 const MAX_POLL_DELAY_MS = 15_000;
-const MAX_POLL_WAIT_MS = 10 * 60 * 1_000;
+const MAX_POLL_WAIT_MS = 40 * 60 * 1_000;
 const getHeaders = (apiKey) => ({
     "Content-Type": "application/json",
     "X-Goog-Api-Key": apiKey,
@@ -262142,15 +262142,19 @@ const extractDependencyUsages = (sourceFile, dependencyName) => {
     const targetImports = sourceFile
         .getImportDeclarations()
         .filter((imp) => imp.getModuleSpecifierValue() === dependencyName);
-    if (targetImports.length === 0)
+    const targetExports = sourceFile
+        .getExportDeclarations()
+        .filter((exp) => exp.getModuleSpecifierValue() === dependencyName);
+    if (targetImports.length === 0 && targetExports.length === 0)
         return null;
     // Use statement AST position as dedup key: two usages on the exact same statement
     // (e.g. foo(bar())) share one UsageContext entry. Identical statements on different lines don't.
     const usageMap = new Map();
-    const importStmts = [];
+    const dependencyStmts = [];
     const addUsages = (refs) => {
         for (const ref of refs) {
-            if (ref.getFirstAncestorByKind(ts_morph_1.SyntaxKind.ImportDeclaration))
+            if (ref.getFirstAncestorByKind(ts_morph_1.SyntaxKind.ImportDeclaration) ||
+                ref.getFirstAncestorByKind(ts_morph_1.SyntaxKind.ExportDeclaration))
                 continue;
             const statementNode = getSurgicalStatementNode(ref);
             const key = statementNode.getStart();
@@ -262159,30 +262163,56 @@ const extractDependencyUsages = (sourceFile, dependencyName) => {
             }
         }
     };
+    // 1. Process Imports
     for (const imp of targetImports) {
-        importStmts.push(imp.getText());
-        // 1. Named imports: import { foo, bar } from 'pkg'
+        dependencyStmts.push(imp.getText());
+        // Named imports: import { foo, bar } from 'pkg'
         for (const namedImport of imp.getNamedImports()) {
             const nameNode = namedImport.getNameNode();
-            // Guard: nameNode may be a StringLiteral for import { "foo" as bar } syntax.
             if (ts_morph_1.Node.isIdentifier(nameNode)) {
                 addUsages(nameNode.findReferencesAsNodes());
             }
         }
-        // 2. Default imports: import Foo from 'pkg'
+        // Default imports: import Foo from 'pkg'
         const defaultImport = imp.getDefaultImport();
         if (defaultImport)
             addUsages(defaultImport.findReferencesAsNodes());
-        // 3. Namespace imports: import * as foo from 'pkg'
+        // Namespace imports: import * as foo from 'pkg'
         const namespaceImport = imp.getNamespaceImport();
         if (namespaceImport)
             addUsages(namespaceImport.findReferencesAsNodes());
     }
+    // 2. Process Re-exports (e.g. export { x } from 'pkg' or export * from 'pkg')
+    for (const exp of targetExports) {
+        dependencyStmts.push(exp.getText());
+        // A re-export IS a usage of the dependency.
+        const key = exp.getStart();
+        if (!usageMap.has(key)) {
+            usageMap.set(key, {
+                statement: exp.getText(),
+                line: exp.getStartLineNumber(),
+                enclosingFunction: null,
+                localCallers: [],
+            });
+        }
+        // Also check for local references to named re-exports (rare but possible)
+        for (const namedExport of exp.getNamedExports()) {
+            const nameNode = namedExport.getNameNode();
+            if (ts_morph_1.Node.isIdentifier(nameNode)) {
+                addUsages(nameNode.findReferencesAsNodes());
+            }
+        }
+    }
+    if (usageMap.size === 0 && dependencyStmts.length === 0)
+        return null;
+    // Special case: if we have imports/exports but no USAGES (e.g. unused import),
+    // the orchestrator might still want to know. But current logic returns null.
+    // We'll stick to the "must have usages" rule unless it's a re-export which is ITS OWN usage.
     if (usageMap.size === 0)
         return null;
     return {
         file: sourceFile.getFilePath(),
-        importStatement: importStmts.join("\n"),
+        importStatement: dependencyStmts.join("\n"),
         usages: Array.from(usageMap.values()),
     };
 };

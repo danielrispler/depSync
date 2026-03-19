@@ -1,0 +1,5 @@
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+git add dist/index.js
