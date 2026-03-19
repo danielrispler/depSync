@@ -247,4 +247,47 @@ export class MyClass { method() { dep(); } }`,
 		// The method is in an exported class, so it IS part of the exported surface!
 		expect(usageMethod.enclosingFunction.isExported).toBe(true);
 	});
+
+	it("captures re-exports as valid dependency usages", () => {
+		const project = createProject();
+		const sf = project.createSourceFile(
+			"t11.ts",
+			`export { compute } from "target-pkg";
+export * from "target-pkg";`,
+		);
+
+		const result = extractDependencyUsages(sf, "target-pkg");
+		assert(result !== null);
+
+		// Two re-export statements
+		expect(result.usages).toHaveLength(2);
+		expect(
+			result.usages.some(
+				(u) => u.statement === 'export { compute } from "target-pkg";',
+			),
+		).toBe(true);
+		expect(
+			result.usages.some((u) => u.statement === 'export * from "target-pkg";'),
+		).toBe(true);
+
+		expect(result.importStatement).toContain(
+			'export { compute } from "target-pkg";',
+		);
+		expect(result.importStatement).toContain('export * from "target-pkg";');
+	});
+
+	it("captures re-exported default modules", () => {
+		const project = createProject();
+		const sf = project.createSourceFile(
+			"t12.ts",
+			`export { default } from "target-pkg";`,
+		);
+
+		const result = extractDependencyUsages(sf, "target-pkg");
+		assert(result !== null);
+		expect(result.usages).toHaveLength(1);
+		expect(result.usages[0]?.statement).toBe(
+			'export { default } from "target-pkg";',
+		);
+	});
 });

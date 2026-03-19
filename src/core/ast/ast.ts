@@ -282,16 +282,24 @@ export const extractDependencyUsages = (
 		.getImportDeclarations()
 		.filter((imp) => imp.getModuleSpecifierValue() === dependencyName);
 
-	if (targetImports.length === 0) return null;
+	const targetExports = sourceFile
+		.getExportDeclarations()
+		.filter((exp) => exp.getModuleSpecifierValue() === dependencyName);
+
+	if (targetImports.length === 0 && targetExports.length === 0) return null;
 
 	// Use statement AST position as dedup key: two usages on the exact same statement
 	// (e.g. foo(bar())) share one UsageContext entry. Identical statements on different lines don't.
 	const usageMap = new Map<number, UsageContext>();
-	const importStmts: string[] = [];
+	const dependencyStmts: string[] = [];
 
 	const addUsages = (refs: Node[]): void => {
 		for (const ref of refs) {
-			if (ref.getFirstAncestorByKind(SyntaxKind.ImportDeclaration)) continue;
+			if (
+				ref.getFirstAncestorByKind(SyntaxKind.ImportDeclaration) ||
+				ref.getFirstAncestorByKind(SyntaxKind.ExportDeclaration)
+			)
+				continue;
 
 			const statementNode = getSurgicalStatementNode(ref);
 			const key = statementNode.getStart();
@@ -302,32 +310,61 @@ export const extractDependencyUsages = (
 		}
 	};
 
+	// 1. Process Imports
 	for (const imp of targetImports) {
-		importStmts.push(imp.getText());
+		dependencyStmts.push(imp.getText());
 
-		// 1. Named imports: import { foo, bar } from 'pkg'
+		// Named imports: import { foo, bar } from 'pkg'
 		for (const namedImport of imp.getNamedImports()) {
 			const nameNode = namedImport.getNameNode();
-			// Guard: nameNode may be a StringLiteral for import { "foo" as bar } syntax.
 			if (Node.isIdentifier(nameNode)) {
 				addUsages(nameNode.findReferencesAsNodes());
 			}
 		}
 
-		// 2. Default imports: import Foo from 'pkg'
+		// Default imports: import Foo from 'pkg'
 		const defaultImport = imp.getDefaultImport();
 		if (defaultImport) addUsages(defaultImport.findReferencesAsNodes());
 
-		// 3. Namespace imports: import * as foo from 'pkg'
+		// Namespace imports: import * as foo from 'pkg'
 		const namespaceImport = imp.getNamespaceImport();
 		if (namespaceImport) addUsages(namespaceImport.findReferencesAsNodes());
 	}
+
+	// 2. Process Re-exports (e.g. export { x } from 'pkg' or export * from 'pkg')
+	for (const exp of targetExports) {
+		dependencyStmts.push(exp.getText());
+
+		// A re-export IS a usage of the dependency.
+		const key = exp.getStart();
+		if (!usageMap.has(key)) {
+			usageMap.set(key, {
+				statement: exp.getText(),
+				line: exp.getStartLineNumber(),
+				enclosingFunction: null,
+				localCallers: [],
+			});
+		}
+
+		// Also check for local references to named re-exports (rare but possible)
+		for (const namedExport of exp.getNamedExports()) {
+			const nameNode = namedExport.getNameNode();
+			if (Node.isIdentifier(nameNode)) {
+				addUsages(nameNode.findReferencesAsNodes());
+			}
+		}
+	}
+
+	if (usageMap.size === 0 && dependencyStmts.length === 0) return null;
+	// Special case: if we have imports/exports but no USAGES (e.g. unused import),
+	// the orchestrator might still want to know. But current logic returns null.
+	// We'll stick to the "must have usages" rule unless it's a re-export which is ITS OWN usage.
 
 	if (usageMap.size === 0) return null;
 
 	return {
 		file: sourceFile.getFilePath(),
-		importStatement: importStmts.join("\n"),
+		importStatement: dependencyStmts.join("\n"),
 		usages: Array.from(usageMap.values()),
 	};
 };
