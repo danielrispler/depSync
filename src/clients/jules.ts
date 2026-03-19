@@ -237,7 +237,7 @@ const BASE_URL = "https://jules.googleapis.com/v1alpha";
 const DEFAULT_PAGE_SIZE = 100;
 const INITIAL_POLL_DELAY_MS = 5_000;
 const MAX_POLL_DELAY_MS = 15_000;
-const MAX_POLL_WAIT_MS: number = 10 * 60 * 1_000;
+const MAX_POLL_WAIT_MS: number = 40 * 60 * 1_000;
 
 const getHeaders = (apiKey: string): Record<string, string> => ({
 	"Content-Type": "application/json",
