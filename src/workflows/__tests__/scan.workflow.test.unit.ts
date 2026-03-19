@@ -4,8 +4,8 @@ import {
 	createJulesAnalysisSession,
 	deleteJulesSession,
 	resolveJulesSource,
+	runJulesSessionWithRetry,
 	summarizeJulesSession,
-	waitForJulesSession,
 } from "../../clients/jules.js";
 import { sendNotification } from "../../clients/notifier.js";
 import { analyzeMonorepoDrift } from "../../core/orchestrator/orchestrator.js";
@@ -29,11 +29,11 @@ vi.mock("../../clients/jules.js", () => ({
 		sourceName: "sources/github-owner-repo",
 		defaultBranch: "main",
 	}),
+	runJulesSessionWithRetry: vi.fn(),
 	summarizeJulesSession: vi.fn().mockResolvedValue({
 		activityCount: 1,
 		analysisMarkdown: "### Summary\nLooks good",
 	}),
-	waitForJulesSession: vi.fn().mockResolvedValue({ state: "COMPLETED" }),
 }));
 vi.mock("../../clients/notifier.js", () => ({
 	sendNotification: vi.fn().mockResolvedValue(undefined),
@@ -45,6 +45,10 @@ vi.mock("../../core/orchestrator/orchestrator.js", () => ({
 describe("handleScanWorkflow", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.mocked(runJulesSessionWithRetry).mockImplementation(
+			async (_apiKey, createSessionAttempt) =>
+				createSessionAttempt({ fetch: globalThis.fetch.bind(globalThis) } as any),
+		);
 	});
 
 	const drift = {
@@ -104,8 +108,8 @@ describe("handleScanWorkflow", () => {
 		);
 
 		expect(resolveJulesSource).toHaveBeenCalledTimes(1);
+		expect(runJulesSessionWithRetry).toHaveBeenCalledTimes(2);
 		expect(createJulesAnalysisSession).toHaveBeenCalledTimes(2);
-		expect(waitForJulesSession).toHaveBeenCalledTimes(2);
 		expect(summarizeJulesSession).toHaveBeenCalledTimes(2);
 		expect(sendNotification).toHaveBeenCalled();
 	});

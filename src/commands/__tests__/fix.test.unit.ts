@@ -6,7 +6,7 @@ import {
 	extractPatchArtifacts,
 	listAllJulesActivities,
 	resolveJulesSource,
-	waitForJulesSession,
+	runJulesSessionWithRetry,
 } from "../../clients/jules.js";
 import { rebuildDriftFromIssueContext } from "../../core/orchestrator/orchestrator.js";
 import { GitPatchApplyError, gitOps } from "../../infrastructure/git.js";
@@ -48,7 +48,9 @@ vi.mock("../../clients/jules.js", () => ({
 		sourceName: "sources/github-owner-repo",
 		defaultBranch: "main",
 	}),
-	waitForJulesSession: vi.fn().mockResolvedValue({ state: "COMPLETED" }),
+	runJulesSessionWithRetry: vi
+		.fn()
+		.mockResolvedValue({ name: "sessions/fix-123", state: "COMPLETED" }),
 }));
 vi.mock("../../core/orchestrator/orchestrator.js", () => ({
 	rebuildDriftFromIssueContext: vi.fn().mockResolvedValue({
@@ -97,6 +99,10 @@ describe("handleFixCommand", () => {
 		vi.clearAllMocks();
 		vi.mocked(gitOps.applyPatchFile).mockImplementation(() => undefined);
 		vi.mocked(gitOps.regenerateLockfile).mockImplementation(() => undefined);
+		vi.mocked(runJulesSessionWithRetry).mockImplementation(
+			async (_apiKey, createSessionAttempt) =>
+				createSessionAttempt({ fetch: globalThis.fetch.bind(globalThis) } as any),
+		);
 	});
 
 	it("applies patch artifacts, creates a PR, and cleans up the session on success", async () => {
@@ -111,8 +117,8 @@ describe("handleFixCommand", () => {
 
 		expect(rebuildDriftFromIssueContext).toHaveBeenCalled();
 		expect(resolveJulesSource).toHaveBeenCalled();
+		expect(runJulesSessionWithRetry).toHaveBeenCalled();
 		expect(createJulesFixSession).toHaveBeenCalled();
-		expect(waitForJulesSession).toHaveBeenCalled();
 		expect(listAllJulesActivities).toHaveBeenCalled();
 		expect(extractPatchArtifacts).toHaveBeenCalled();
 		expect(gitOps.applyPatchFile).toHaveBeenCalled();

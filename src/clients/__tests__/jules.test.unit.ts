@@ -1,3 +1,4 @@
+import * as core from "@actions/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AggregatedDrift } from "../../types/drift.js";
 import {
@@ -9,9 +10,14 @@ import {
 	listAllJulesActivities,
 	listJulesSources,
 	resolveJulesSource,
+	runJulesSessionWithRetry,
 	summarizeJulesSession,
 	waitForJulesSession,
 } from "../jules.js";
+
+vi.mock("@actions/core", () => ({
+	warning: vi.fn(),
+}));
 
 describe("Jules API Client", () => {
 	const mockApiKey = "test-api-key";
@@ -51,6 +57,7 @@ describe("Jules API Client", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.useRealTimers();
 	});
 
 	it("resolves the Jules source across paginated responses", async () => {
@@ -240,6 +247,205 @@ describe("Jules API Client", () => {
 				fetch: mockFetch as any,
 			}),
 		).rejects.toThrow(/Patch generation failed/);
+	});
+
+	it("retries transient failed sessions by creating a fresh session", async () => {
+		vi.useFakeTimers();
+
+		const mockFetch = vi
+			.fn()
+			.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				text: vi
+					.fn()
+					.mockResolvedValue(
+						JSON.stringify({ name: "sessions/1", state: "QUEUED" }),
+					),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				text: vi
+					.fn()
+					.mockResolvedValue(
+						JSON.stringify({ name: "sessions/1", state: "FAILED" }),
+					),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue(
+					JSON.stringify({
+						activities: [
+							{
+								name: "sessions/1/activities/1",
+								id: "1",
+								createTime: "2026-03-19T10:00:00.000Z",
+								originator: "agent",
+								sessionFailed: {
+									reason:
+										"Jules encountered an error when cloning the repo... HTTP 502 curl 22",
+								},
+							},
+						],
+					}),
+				),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue("{}"),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				text: vi
+					.fn()
+					.mockResolvedValue(
+						JSON.stringify({ name: "sessions/2", state: "QUEUED" }),
+					),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				text: vi
+					.fn()
+					.mockResolvedValue(
+						JSON.stringify({ name: "sessions/2", state: "COMPLETED" }),
+					),
+			});
+
+		const sessionPromise = runJulesSessionWithRetry(
+			mockApiKey,
+			(deps) => createJulesFixSession(mockApiKey, resolvedSource, mockDrift, deps),
+			{ fetch: mockFetch as any },
+		);
+
+		await vi.advanceTimersByTimeAsync(5_000);
+		const result = await sessionPromise;
+
+		expect(result.name).toBe("sessions/2");
+		expect(mockFetch).toHaveBeenCalledWith(
+			"https://jules.googleapis.com/v1alpha/sessions/1",
+			expect.objectContaining({
+				method: "DELETE",
+			}),
+		);
+		expect(
+			mockFetch.mock.calls.filter(
+				([url, options]) =>
+					url === "https://jules.googleapis.com/v1alpha/sessions" &&
+					options?.method === "POST",
+			),
+		).toHaveLength(2);
+		expect(core.warning).toHaveBeenCalledWith(
+			expect.stringContaining("HTTP 502"),
+		);
+		expect(core.warning).not.toHaveBeenCalledWith(
+			expect.stringContaining("cloning the repo"),
+		);
+	});
+
+	it("does not retry non-transient failed sessions", async () => {
+		const mockFetch = vi
+			.fn()
+			.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				text: vi
+					.fn()
+					.mockResolvedValue(
+						JSON.stringify({ name: "sessions/1", state: "QUEUED" }),
+					),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				text: vi
+					.fn()
+					.mockResolvedValue(
+						JSON.stringify({ name: "sessions/1", state: "FAILED" }),
+					),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue(
+					JSON.stringify({
+						activities: [
+							{
+								name: "sessions/1/activities/1",
+								id: "1",
+								createTime: "2026-03-19T10:00:00.000Z",
+								originator: "agent",
+								sessionFailed: { reason: "invalid prompt" },
+							},
+						],
+					}),
+				),
+			})
+			.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				text: vi.fn().mockResolvedValue("{}"),
+			});
+
+		await expect(
+			runJulesSessionWithRetry(
+				mockApiKey,
+				(deps) =>
+					createJulesFixSession(mockApiKey, resolvedSource, mockDrift, deps),
+				{ fetch: mockFetch as any },
+			),
+		).rejects.toThrow(/invalid prompt/);
+
+		expect(
+			mockFetch.mock.calls.filter(
+				([url, options]) =>
+					url === "https://jules.googleapis.com/v1alpha/sessions" &&
+					options?.method === "POST",
+			),
+		).toHaveLength(1);
+	});
+
+	it("retries transient session creation failures up to the maximum attempts", async () => {
+		vi.useFakeTimers();
+
+		const mockFetch = vi
+			.fn()
+			.mockResolvedValueOnce({
+				ok: false,
+				status: 502,
+				text: vi.fn().mockResolvedValue("bad gateway"),
+			})
+			.mockResolvedValueOnce({
+				ok: false,
+				status: 502,
+				text: vi.fn().mockResolvedValue("bad gateway"),
+			})
+			.mockResolvedValueOnce({
+				ok: false,
+				status: 502,
+				text: vi.fn().mockResolvedValue("bad gateway"),
+			});
+
+		const sessionPromise = runJulesSessionWithRetry(
+			mockApiKey,
+			(deps) => createJulesFixSession(mockApiKey, resolvedSource, mockDrift, deps),
+			{ fetch: mockFetch as any },
+		);
+		const rejection = expect(sessionPromise).rejects.toThrow(/502/);
+
+		await vi.advanceTimersByTimeAsync(15_000);
+		await rejection;
+		expect(
+			mockFetch.mock.calls.filter(
+				([url, options]) =>
+					url === "https://jules.googleapis.com/v1alpha/sessions" &&
+					options?.method === "POST",
+			),
+		).toHaveLength(3);
 	});
 
 	it("sorts paginated activities by createTime", async () => {

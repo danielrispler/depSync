@@ -5,8 +5,8 @@ import {
 	createJulesAnalysisSession,
 	deleteJulesSession,
 	resolveJulesSource,
+	runJulesSessionWithRetry,
 	summarizeJulesSession,
-	waitForJulesSession,
 } from "../clients/jules.js";
 import { sendNotification } from "../clients/notifier.js";
 import { analyzeMonorepoDrift } from "../core/orchestrator/orchestrator.js";
@@ -91,14 +91,13 @@ const processDrift = async (
 		core.info(
 			`🤖 Opening Jules analysis session for ${drift.dependencyName}...`,
 		);
-		const session = await createJulesAnalysisSession(
+		const session = await runJulesSessionWithRetry(
 			julesApiKey,
-			source,
-			drift,
+			(deps) =>
+				createJulesAnalysisSession(julesApiKey, source, drift, deps),
 		);
 		sessionName = session.name;
 
-		await waitForJulesSession(julesApiKey, session.name);
 		const sessionSummary = await summarizeJulesSession(
 			julesApiKey,
 			session.name,

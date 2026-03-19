@@ -11,7 +11,7 @@ import {
 	extractPatchArtifacts,
 	listAllJulesActivities,
 	resolveJulesSource,
-	waitForJulesSession,
+	runJulesSessionWithRetry,
 } from "../clients/jules.js";
 import { parseIssueContext } from "../core/orchestrator/issue-context.js";
 import { rebuildDriftFromIssueContext } from "../core/orchestrator/orchestrator.js";
@@ -189,10 +189,12 @@ export const handleFixCommand = async (
 			context.repo.repo,
 		);
 
-		const session = await createJulesFixSession(julesApiKey, source, drift);
+		const session = await runJulesSessionWithRetry(
+			julesApiKey,
+			(deps) => createJulesFixSession(julesApiKey, source, drift, deps),
+		);
 		sessionName = session.name;
 
-		await waitForJulesSession(julesApiKey, session.name);
 		const activities = await listAllJulesActivities(julesApiKey, session.name);
 		const patches = extractPatchArtifacts(session.name, activities);
 		await applyPatchArtifactsSequentially(context, patches);

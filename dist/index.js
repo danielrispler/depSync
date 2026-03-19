@@ -261179,12 +261179,46 @@ exports.addCommentReaction = addCommentReaction;
 /***/ }),
 
 /***/ 3054:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.deleteJulesSession = exports.approveJulesPlan = exports.summarizeJulesSession = exports.waitForJulesSession = exports.extractPatchArtifacts = exports.extractAnalysisMarkdown = exports.listAllJulesActivities = exports.listJulesActivities = exports.getJulesSession = exports.createJulesFixSession = exports.createJulesSession = exports.createJulesAnalysisSession = exports.resolveJulesSource = exports.listJulesSources = exports.JulesMissingPatchArtifactError = exports.JulesSessionStatusError = exports.JulesSourceNotFoundError = exports.JulesApiError = void 0;
+exports.deleteJulesSession = exports.approveJulesPlan = exports.summarizeJulesSession = exports.runJulesSessionWithRetry = exports.waitForJulesSession = exports.extractPatchArtifacts = exports.extractAnalysisMarkdown = exports.listAllJulesActivities = exports.listJulesActivities = exports.getJulesSession = exports.createJulesFixSession = exports.createJulesSession = exports.createJulesAnalysisSession = exports.resolveJulesSource = exports.listJulesSources = exports.JulesMissingPatchArtifactError = exports.JulesSessionStatusError = exports.JulesSourceNotFoundError = exports.JulesApiError = void 0;
+const core = __importStar(__nccwpck_require__(6966));
 const payload_js_1 = __nccwpck_require__(1947);
 class JulesApiError extends Error {
     status;
@@ -261205,11 +261239,13 @@ exports.JulesSourceNotFoundError = JulesSourceNotFoundError;
 class JulesSessionStatusError extends Error {
     sessionName;
     state;
-    constructor(sessionName, state, message) {
+    failureReason;
+    constructor(sessionName, state, message, failureReason) {
         super(message);
         this.name = "JulesSessionStatusError";
         this.sessionName = sessionName;
         this.state = state;
+        this.failureReason = failureReason;
     }
 }
 exports.JulesSessionStatusError = JulesSessionStatusError;
@@ -261228,6 +261264,9 @@ const DEFAULT_PAGE_SIZE = 100;
 const INITIAL_POLL_DELAY_MS = 5_000;
 const MAX_POLL_DELAY_MS = 15_000;
 const MAX_POLL_WAIT_MS = 40 * 60 * 1_000;
+const MAX_SESSION_RETRY_ATTEMPTS = 3;
+const SESSION_RETRY_BASE_DELAY_MS = 5_000;
+const TRANSIENT_INFRASTRUCTURE_ERROR_PATTERN = /\b(502|500|503|504|cloning|clone|network|timeout|timed out|connection|socket|fetch failed|curl 22|econnreset|enotfound|eai_again)\b/i;
 const getHeaders = (apiKey) => ({
     "Content-Type": "application/json",
     "X-Goog-Api-Key": apiKey,
@@ -261297,6 +261336,43 @@ const getSessionFailureReason = (activities) => {
         }
     }
     return undefined;
+};
+const isTransientInfrastructureMessage = (message) => TRANSIENT_INFRASTRUCTURE_ERROR_PATTERN.test(message);
+const toSafeWarningDetails = (error) => {
+    if (error instanceof JulesApiError) {
+        return `HTTP ${error.status}`;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const normalized = message.toLowerCase();
+    if (/\b502\b/.test(normalized))
+        return "HTTP 502";
+    if (/\b500\b/.test(normalized))
+        return "HTTP 500";
+    if (/\b503\b/.test(normalized))
+        return "HTTP 503";
+    if (/\b504\b/.test(normalized))
+        return "HTTP 504";
+    if (/\b(cloning|clone)\b/.test(normalized))
+        return "repo cloning failure";
+    if (/\b(timeout|timed out)\b/.test(normalized))
+        return "network timeout";
+    if (/\b(connection|socket|fetch failed|econnreset|enotfound|eai_again)\b/.test(normalized)) {
+        return "network failure";
+    }
+    return "infrastructure failure";
+};
+const isTransientInfrastructureError = (error) => {
+    if (error instanceof JulesSessionStatusError) {
+        const candidate = error.failureReason ?? error.message;
+        return (error.state === "FAILED" && isTransientInfrastructureMessage(candidate));
+    }
+    if (error instanceof JulesApiError) {
+        return (error.status >= 500 || isTransientInfrastructureMessage(error.message));
+    }
+    if (error instanceof Error) {
+        return isTransientInfrastructureMessage(error.message);
+    }
+    return false;
 };
 const isChangeSetArtifact = (artifact) => typeof artifact?.changeSet?.gitPatch
     ?.unidiffPatch === "string";
@@ -261402,7 +261478,7 @@ const waitForJulesSession = async (apiKey, sessionName, deps = defaultDependenci
             const reason = getSessionFailureReason(activities);
             throw new JulesSessionStatusError(sessionName, "FAILED", reason
                 ? `Jules session ${sessionName} failed: ${reason}`
-                : `Jules session ${sessionName} failed.`);
+                : `Jules session ${sessionName} failed.`, reason);
         }
         await sleep(delayMs);
         delayMs = Math.min(delayMs * 2, MAX_POLL_DELAY_MS);
@@ -261410,6 +261486,39 @@ const waitForJulesSession = async (apiKey, sessionName, deps = defaultDependenci
     throw new JulesSessionStatusError(sessionName, "TIMEOUT", `Timed out waiting for Jules session ${sessionName} to complete.`);
 };
 exports.waitForJulesSession = waitForJulesSession;
+const cleanupAttemptSession = async (apiKey, sessionName, deps) => {
+    await (0, exports.deleteJulesSession)(apiKey, sessionName, deps).catch((error) => {
+        core.warning(`Failed to clean up broken Jules session ${sessionName}: ${toSafeWarningDetails(error)}`);
+    });
+};
+const runJulesSessionWithRetry = async (apiKey, createSessionAttempt, deps = defaultDependencies) => {
+    let lastError;
+    for (let attempt = 1; attempt <= MAX_SESSION_RETRY_ATTEMPTS; attempt += 1) {
+        let sessionName;
+        try {
+            const session = await createSessionAttempt(deps);
+            sessionName = session.name;
+            return await (0, exports.waitForJulesSession)(apiKey, session.name, deps);
+        }
+        catch (error) {
+            lastError = error;
+            if (sessionName) {
+                await cleanupAttemptSession(apiKey, sessionName, deps);
+            }
+            if (!isTransientInfrastructureError(error) ||
+                attempt === MAX_SESSION_RETRY_ATTEMPTS) {
+                throw error;
+            }
+            const backoffMs = SESSION_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+            core.warning(`Transient Jules infrastructure failure on attempt ${attempt}/${MAX_SESSION_RETRY_ATTEMPTS}: ${toSafeWarningDetails(error)}. Retrying in ${backoffMs}ms...`);
+            await sleep(backoffMs);
+        }
+    }
+    throw lastError instanceof Error
+        ? lastError
+        : new Error("Jules session retry failed without a captured error.");
+};
+exports.runJulesSessionWithRetry = runJulesSessionWithRetry;
 const summarizeJulesSession = async (apiKey, sessionName, deps = defaultDependencies) => {
     const activities = await (0, exports.listAllJulesActivities)(apiKey, sessionName, deps);
     return {
@@ -261866,9 +261975,8 @@ const handleFixCommand = async (githubToken, julesApiKey, issueBody, issueNumber
         const issueContext = (0, issue_context_js_1.parseIssueContext)(issueBody);
         const drift = await (0, orchestrator_js_1.rebuildDriftFromIssueContext)(issueContext, githubToken, coreFrameworks);
         const source = await (0, jules_js_1.resolveJulesSource)(julesApiKey, context.repo.owner, context.repo.repo);
-        const session = await (0, jules_js_1.createJulesFixSession)(julesApiKey, source, drift);
+        const session = await (0, jules_js_1.runJulesSessionWithRetry)(julesApiKey, (deps) => (0, jules_js_1.createJulesFixSession)(julesApiKey, source, drift, deps));
         sessionName = session.name;
-        await (0, jules_js_1.waitForJulesSession)(julesApiKey, session.name);
         const activities = await (0, jules_js_1.listAllJulesActivities)(julesApiKey, session.name);
         const patches = (0, jules_js_1.extractPatchArtifacts)(session.name, activities);
         await applyPatchArtifactsSequentially(context, patches);
@@ -263343,9 +263451,8 @@ const processDrift = async (githubToken, julesApiKey, drift, source) => {
     let sessionName;
     try {
         core.info(`🤖 Opening Jules analysis session for ${drift.dependencyName}...`);
-        const session = await (0, jules_js_1.createJulesAnalysisSession)(julesApiKey, source, drift);
+        const session = await (0, jules_js_1.runJulesSessionWithRetry)(julesApiKey, (deps) => (0, jules_js_1.createJulesAnalysisSession)(julesApiKey, source, drift, deps));
         sessionName = session.name;
-        await (0, jules_js_1.waitForJulesSession)(julesApiKey, session.name);
         const sessionSummary = await (0, jules_js_1.summarizeJulesSession)(julesApiKey, session.name);
         const analysis = buildIssueAnalysis(drift, sessionSummary.analysisMarkdown, sessionSummary.activityCount);
         core.info(`📅 Opening GitHub issue for ${drift.dependencyName}...`);

@@ -1,3 +1,4 @@
+import * as core from "@actions/core";
 import {
 	buildAnalysisPayload,
 	buildFixPayload,
@@ -207,16 +208,19 @@ export class JulesSourceNotFoundError extends Error {
 export class JulesSessionStatusError extends Error {
 	readonly sessionName: string;
 	readonly state: JulesSessionState | "TIMEOUT";
+	readonly failureReason?: string;
 
 	constructor(
 		sessionName: string,
 		state: JulesSessionState | "TIMEOUT",
 		message: string,
+		failureReason?: string,
 	) {
 		super(message);
 		this.name = "JulesSessionStatusError";
 		this.sessionName = sessionName;
 		this.state = state;
+		this.failureReason = failureReason;
 	}
 }
 
@@ -238,6 +242,10 @@ const DEFAULT_PAGE_SIZE = 100;
 const INITIAL_POLL_DELAY_MS = 5_000;
 const MAX_POLL_DELAY_MS = 15_000;
 const MAX_POLL_WAIT_MS: number = 40 * 60 * 1_000;
+const MAX_SESSION_RETRY_ATTEMPTS = 3;
+const SESSION_RETRY_BASE_DELAY_MS = 5_000;
+const TRANSIENT_INFRASTRUCTURE_ERROR_PATTERN =
+	/\b(502|500|503|504|cloning|clone|network|timeout|timed out|connection|socket|fetch failed|curl 22|econnreset|enotfound|eai_again)\b/i;
 
 const getHeaders = (apiKey: string): Record<string, string> => ({
 	"Content-Type": "application/json",
@@ -358,6 +366,47 @@ const getSessionFailureReason = (
 	}
 
 	return undefined;
+};
+
+const isTransientInfrastructureMessage = (message: string): boolean =>
+	TRANSIENT_INFRASTRUCTURE_ERROR_PATTERN.test(message);
+
+const toSafeWarningDetails = (error: unknown): string => {
+	if (error instanceof JulesApiError) {
+		return `HTTP ${error.status}`;
+	}
+
+	const message = error instanceof Error ? error.message : String(error);
+	const normalized = message.toLowerCase();
+
+	if (/\b502\b/.test(normalized)) return "HTTP 502";
+	if (/\b500\b/.test(normalized)) return "HTTP 500";
+	if (/\b503\b/.test(normalized)) return "HTTP 503";
+	if (/\b504\b/.test(normalized)) return "HTTP 504";
+	if (/\b(cloning|clone)\b/.test(normalized)) return "repo cloning failure";
+	if (/\b(timeout|timed out)\b/.test(normalized)) return "network timeout";
+	if (/\b(connection|socket|fetch failed|econnreset|enotfound|eai_again)\b/.test(normalized)) {
+		return "network failure";
+	}
+
+	return "infrastructure failure";
+};
+
+const isTransientInfrastructureError = (error: unknown): boolean => {
+	if (error instanceof JulesSessionStatusError) {
+		const candidate = error.failureReason ?? error.message;
+		return error.state === "FAILED" && isTransientInfrastructureMessage(candidate);
+	}
+
+	if (error instanceof JulesApiError) {
+		return error.status >= 500 || isTransientInfrastructureMessage(error.message);
+	}
+
+	if (error instanceof Error) {
+		return isTransientInfrastructureMessage(error.message);
+	}
+
+	return false;
 };
 
 const isChangeSetArtifact = (
@@ -555,6 +604,7 @@ export const waitForJulesSession = async (
 				reason
 					? `Jules session ${sessionName} failed: ${reason}`
 					: `Jules session ${sessionName} failed.`,
+				reason,
 			);
 		}
 
@@ -567,6 +617,65 @@ export const waitForJulesSession = async (
 		"TIMEOUT",
 		`Timed out waiting for Jules session ${sessionName} to complete.`,
 	);
+};
+
+const cleanupAttemptSession = async (
+	apiKey: string,
+	sessionName: string,
+	deps: JulesDependencies,
+): Promise<void> => {
+	await deleteJulesSession(apiKey, sessionName, deps).catch((error) => {
+		core.warning(
+			`Failed to clean up broken Jules session ${sessionName}: ${toSafeWarningDetails(error)}`,
+		);
+	});
+};
+
+export const runJulesSessionWithRetry = async (
+	apiKey: string,
+	createSessionAttempt: (
+		deps: JulesDependencies,
+	) => Promise<JulesSessionResponse>,
+	deps: JulesDependencies = defaultDependencies,
+): Promise<JulesSessionResponse> => {
+	let lastError: unknown;
+
+	for (
+		let attempt: number = 1;
+		attempt <= MAX_SESSION_RETRY_ATTEMPTS;
+		attempt += 1
+	) {
+		let sessionName: string | undefined;
+
+		try {
+			const session = await createSessionAttempt(deps);
+			sessionName = session.name;
+			return await waitForJulesSession(apiKey, session.name, deps);
+		} catch (error) {
+			lastError = error;
+
+			if (sessionName) {
+				await cleanupAttemptSession(apiKey, sessionName, deps);
+			}
+
+			if (
+				!isTransientInfrastructureError(error) ||
+				attempt === MAX_SESSION_RETRY_ATTEMPTS
+			) {
+				throw error;
+			}
+
+			const backoffMs = SESSION_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+			core.warning(
+				`Transient Jules infrastructure failure on attempt ${attempt}/${MAX_SESSION_RETRY_ATTEMPTS}: ${toSafeWarningDetails(error)}. Retrying in ${backoffMs}ms...`,
+			);
+			await sleep(backoffMs);
+		}
+	}
+
+	throw lastError instanceof Error
+		? lastError
+		: new Error("Jules session retry failed without a captured error.");
 };
 
 export const summarizeJulesSession = async (
