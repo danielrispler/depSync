@@ -7,8 +7,8 @@
 		"start": "node src/index.ts",
 		"build": "ncc build src/index.ts -o dist",
 		"test": "vitest run",
-		"test:unit": "vitest run src/**/__tests__/**/*.test.unit.ts",
-		"test:int": "vitest run src/**/__tests__/**/*.test.int.ts",
+		"test:unit": "vitest run test.unit.ts",
+		"test:int": "vitest run test.int.ts",
 		"test:watch": "vitest",
 		"lint": "biome check src/ --write",
 		"format": "biome format --write src/",
@@ -23,7 +23,7 @@
 		"@types/node": "^25.4.0",
 		"@vercel/ncc": "^0.38.4",
 		"typescript": "^5.9.3",
-		"vitest": "^4.0.18"
+		"vitest": "^4.1.0"
 	},
 	"dependencies": {
 		"@actions/core": "^1.11.1",
