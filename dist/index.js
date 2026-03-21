@@ -261263,7 +261263,7 @@ const BASE_URL = "https://jules.googleapis.com/v1alpha";
 const DEFAULT_PAGE_SIZE = 100;
 const INITIAL_POLL_DELAY_MS = 5_000;
 const MAX_POLL_DELAY_MS = 15_000;
-const MAX_POLL_WAIT_MS = 40 * 60 * 1_000;
+const MAX_POLL_WAIT_MS = 90 * 60 * 1_000;
 const MAX_SESSION_RETRY_ATTEMPTS = 3;
 const SESSION_RETRY_BASE_DELAY_MS = 5_000;
 const TRANSIENT_INFRASTRUCTURE_ERROR_PATTERN = /\b(502|500|503|504|cloning|clone|network|timeout|timed out|connection|socket|fetch failed|curl 22|econnreset|enotfound|eai_again)\b/i;
@@ -261949,17 +261949,15 @@ const handleFailure = async (ctx, message) => {
         body: `❌ **Failed to generate PR**: ${message}`,
     });
 };
-// const cleanup = async (
-// 	julesApiKey: string,
-// 	sessionName: string | undefined,
-// ): Promise<void> => {
-// 	if (!sessionName) return;
-// 	core.info("🧹 Cleaning up Jules session...");
-// 	await deleteJulesSession(julesApiKey, sessionName).catch((error) => {
-// 		const message = error instanceof Error ? error.message : String(error);
-// 		core.warning(`Cleanup failed: ${message}`);
-// 	});
-// };
+const cleanup = async (julesApiKey, sessionName) => {
+    if (!sessionName)
+        return;
+    core.info("🧹 Cleaning up Jules session...");
+    await (0, jules_js_1.deleteJulesSession)(julesApiKey, sessionName).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        core.warning(`Cleanup failed: ${message}`);
+    });
+};
 const handleFixCommand = async (githubToken, julesApiKey, issueBody, issueNumber, commentId, coreFrameworks) => {
     const context = {
         githubToken,
@@ -261971,16 +261969,14 @@ const handleFixCommand = async (githubToken, julesApiKey, issueBody, issueNumber
         repo: github.context.repo,
         coreFrameworks,
     };
-    // let sessionName: string | undefined;
+    let sessionName;
     try {
         await notifyStart(context);
         const issueContext = (0, issue_context_js_1.parseIssueContext)(issueBody);
         const drift = await (0, orchestrator_js_1.rebuildDriftFromIssueContext)(issueContext, githubToken, coreFrameworks);
         const source = await (0, jules_js_1.resolveJulesSource)(julesApiKey, context.repo.owner, context.repo.repo);
         const session = await (0, jules_js_1.runJulesSessionWithRetry)(julesApiKey, (deps) => (0, jules_js_1.createJulesFixSession)(julesApiKey, source, drift, deps));
-        // sessionName = session.name;
-        const sessionId = session.name.replace("sessions/", "");
-        console.log(`\n🔍 Direct Jules UI Link for Debugging: https://jules.google.com/session/${sessionId}\n`);
+        sessionName = session.name;
         const activities = await (0, jules_js_1.listAllJulesActivities)(julesApiKey, session.name);
         const patches = (0, jules_js_1.extractPatchArtifacts)(session.name, activities);
         await applyPatchArtifactsSequentially(context, patches);
@@ -261993,7 +261989,7 @@ const handleFixCommand = async (githubToken, julesApiKey, issueBody, issueNumber
         await handleFailure(context, message);
     }
     finally {
-        // await cleanup(julesApiKey, sessionName);
+        await cleanup(julesApiKey, sessionName);
     }
 };
 exports.handleFixCommand = handleFixCommand;

@@ -126,10 +126,10 @@ describe("handleFixCommand", () => {
 		expect(gitOps.applyPatchFile).toHaveBeenCalled();
 		expect(gitOps.regenerateLockfile).toHaveBeenCalled();
 		expect(gitOps.push).toHaveBeenCalled();
-		// expect(deleteJulesSession).toHaveBeenCalledWith(
-		// 	mockJulesApiKey,
-		// 	"sessions/fix-123",
-		// );
+		expect(deleteJulesSession).toHaveBeenCalledWith(
+			mockJulesApiKey,
+			"sessions/fix-123",
+		);
 	});
 
 	it("restores the working tree and comments on patch failure", async () => {
@@ -153,10 +153,10 @@ describe("handleFixCommand", () => {
 		expect(core.error).toHaveBeenCalledWith(
 			expect.stringContaining("Patch diff --git a/src/app.ts b/src/app.ts"),
 		);
-		// expect(deleteJulesSession).toHaveBeenCalledWith(
-		// 	mockJulesApiKey,
-		// 	"sessions/fix-123",
-		// );
+		expect(deleteJulesSession).toHaveBeenCalledWith(
+			mockJulesApiKey,
+			"sessions/fix-123",
+		);
 	});
 
 	it("restores the working tree and comments on lockfile regeneration failure", async () => {

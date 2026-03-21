@@ -7,6 +7,7 @@ import * as github from "@actions/github";
 import { addCommentReaction } from "../clients/github.js";
 import {
 	createJulesFixSession,
+	deleteJulesSession,
 	extractPatchArtifacts,
 	listAllJulesActivities,
 	resolveJulesSource,
@@ -139,18 +140,18 @@ const handleFailure = async (
 	});
 };
 
-// const cleanup = async (
-// 	julesApiKey: string,
-// 	sessionName: string | undefined,
-// ): Promise<void> => {
-// 	if (!sessionName) return;
+const cleanup = async (
+	julesApiKey: string,
+	sessionName: string | undefined,
+): Promise<void> => {
+	if (!sessionName) return;
 
-// 	core.info("🧹 Cleaning up Jules session...");
-// 	await deleteJulesSession(julesApiKey, sessionName).catch((error) => {
-// 		const message = error instanceof Error ? error.message : String(error);
-// 		core.warning(`Cleanup failed: ${message}`);
-// 	});
-// };
+	core.info("🧹 Cleaning up Jules session...");
+	await deleteJulesSession(julesApiKey, sessionName).catch((error) => {
+		const message = error instanceof Error ? error.message : String(error);
+		core.warning(`Cleanup failed: ${message}`);
+	});
+};
 
 export const handleFixCommand = async (
 	githubToken: string,
@@ -171,7 +172,7 @@ export const handleFixCommand = async (
 		coreFrameworks,
 	};
 
-	// let sessionName: string | undefined;
+	let sessionName: string | undefined;
 
 	try {
 		await notifyStart(context);
@@ -191,12 +192,7 @@ export const handleFixCommand = async (
 		const session = await runJulesSessionWithRetry(julesApiKey, (deps) =>
 			createJulesFixSession(julesApiKey, source, drift, deps),
 		);
-		// sessionName = session.name;
-
-		const sessionId = session.name.replace("sessions/", "");
-		console.log(
-			`\n🔍 Direct Jules UI Link for Debugging: https://jules.google.com/session/${sessionId}\n`,
-		);
+		sessionName = session.name;
 
 		const activities = await listAllJulesActivities(julesApiKey, session.name);
 		const patches = extractPatchArtifacts(session.name, activities);
@@ -209,6 +205,6 @@ export const handleFixCommand = async (
 		const message = error instanceof Error ? error.message : String(error);
 		await handleFailure(context, message);
 	} finally {
-		// await cleanup(julesApiKey, sessionName);
+		await cleanup(julesApiKey, sessionName);
 	}
 };
