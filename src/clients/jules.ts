@@ -54,6 +54,12 @@ export interface JulesSessionResponse {
 	}>;
 }
 
+export interface JulesPullRequestOutput {
+	url: string;
+	title: string;
+	description: string;
+}
+
 export interface JulesSource {
 	name: string;
 	id: string;
@@ -233,6 +239,13 @@ export class JulesMissingPatchArtifactError extends Error {
 	}
 }
 
+export class JulesMissingPullRequestOutputError extends Error {
+	constructor(sessionName: string) {
+		super(`No pull request output was found for Jules session ${sessionName}.`);
+		this.name = "JulesMissingPullRequestOutputError";
+	}
+}
+
 const defaultDependencies: JulesDependencies = {
 	fetch: globalThis.fetch.bind(globalThis),
 };
@@ -241,11 +254,17 @@ const BASE_URL = "https://jules.googleapis.com/v1alpha";
 const DEFAULT_PAGE_SIZE = 100;
 const INITIAL_POLL_DELAY_MS = 5_000;
 const MAX_POLL_DELAY_MS = 15_000;
-const MAX_POLL_WAIT_MS: number = 90 * 60 * 1_000;
+const MAX_POLL_WAIT_MS: number = 7 * 60 * 60 * 1_000;
 const MAX_SESSION_RETRY_ATTEMPTS = 3;
 const SESSION_RETRY_BASE_DELAY_MS = 5_000;
 const TRANSIENT_INFRASTRUCTURE_ERROR_PATTERN =
 	/\b(502|500|503|504|cloning|clone|network|timeout|timed out|connection|socket|fetch failed|curl 22|econnreset|enotfound|eai_again)\b/i;
+const INTERACTIVE_SESSION_STATES: ReadonlySet<JulesSessionState> =
+	new Set<JulesSessionState>([
+		"AWAITING_PLAN_APPROVAL",
+		"AWAITING_USER_FEEDBACK",
+		"PAUSED",
+	]);
 
 const getHeaders = (apiKey: string): Record<string, string> => ({
 	"Content-Type": "application/json",
@@ -473,7 +492,8 @@ export const createJulesFixSession = async (
 					startingBranch: source.defaultBranch,
 				},
 			},
-			automationMode: "AUTOMATION_MODE_UNSPECIFIED",
+			automationMode: "AUTO_CREATE_PR",
+			requirePlanApproval: false,
 		},
 		deps,
 	);
@@ -584,6 +604,22 @@ export const extractPatchArtifacts = (
 	return patches;
 };
 
+export const extractPullRequestOutput = (
+	session: JulesSessionResponse,
+): JulesPullRequestOutput => {
+	for (const output of session.outputs ?? []) {
+		if (
+			output.pullRequest?.url &&
+			output.pullRequest.title &&
+			typeof output.pullRequest.description === "string"
+		) {
+			return output.pullRequest;
+		}
+	}
+
+	throw new JulesMissingPullRequestOutputError(session.name);
+};
+
 export const waitForJulesSession = async (
 	apiKey: string,
 	sessionName: string,
@@ -613,6 +649,14 @@ export const waitForJulesSession = async (
 					? `Jules session ${sessionName} failed: ${reason}`
 					: `Jules session ${sessionName} failed.`,
 				reason,
+			);
+		}
+
+		if (INTERACTIVE_SESSION_STATES.has(session.state)) {
+			throw new JulesSessionStatusError(
+				sessionName,
+				session.state,
+				`Jules session ${sessionName} entered interactive state ${session.state}, which violates zero-touch execution.`,
 			);
 		}
 

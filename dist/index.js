@@ -261217,7 +261217,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.deleteJulesSession = exports.approveJulesPlan = exports.summarizeJulesSession = exports.runJulesSessionWithRetry = exports.waitForJulesSession = exports.extractPatchArtifacts = exports.extractAnalysisMarkdown = exports.listAllJulesActivities = exports.listJulesActivities = exports.getJulesSession = exports.createJulesFixSession = exports.createJulesSession = exports.createJulesAnalysisSession = exports.resolveJulesSource = exports.listJulesSources = exports.JulesMissingPatchArtifactError = exports.JulesSessionStatusError = exports.JulesSourceNotFoundError = exports.JulesApiError = void 0;
+exports.deleteJulesSession = exports.approveJulesPlan = exports.summarizeJulesSession = exports.runJulesSessionWithRetry = exports.waitForJulesSession = exports.extractPullRequestOutput = exports.extractPatchArtifacts = exports.extractAnalysisMarkdown = exports.listAllJulesActivities = exports.listJulesActivities = exports.getJulesSession = exports.createJulesFixSession = exports.createJulesSession = exports.createJulesAnalysisSession = exports.resolveJulesSource = exports.listJulesSources = exports.JulesMissingPullRequestOutputError = exports.JulesMissingPatchArtifactError = exports.JulesSessionStatusError = exports.JulesSourceNotFoundError = exports.JulesApiError = void 0;
 const core = __importStar(__nccwpck_require__(6966));
 const payload_js_1 = __nccwpck_require__(1947);
 class JulesApiError extends Error {
@@ -261256,6 +261256,13 @@ class JulesMissingPatchArtifactError extends Error {
     }
 }
 exports.JulesMissingPatchArtifactError = JulesMissingPatchArtifactError;
+class JulesMissingPullRequestOutputError extends Error {
+    constructor(sessionName) {
+        super(`No pull request output was found for Jules session ${sessionName}.`);
+        this.name = "JulesMissingPullRequestOutputError";
+    }
+}
+exports.JulesMissingPullRequestOutputError = JulesMissingPullRequestOutputError;
 const defaultDependencies = {
     fetch: globalThis.fetch.bind(globalThis),
 };
@@ -261263,10 +261270,15 @@ const BASE_URL = "https://jules.googleapis.com/v1alpha";
 const DEFAULT_PAGE_SIZE = 100;
 const INITIAL_POLL_DELAY_MS = 5_000;
 const MAX_POLL_DELAY_MS = 15_000;
-const MAX_POLL_WAIT_MS = 90 * 60 * 1_000;
+const MAX_POLL_WAIT_MS = 7 * 60 * 60 * 1_000;
 const MAX_SESSION_RETRY_ATTEMPTS = 3;
 const SESSION_RETRY_BASE_DELAY_MS = 5_000;
 const TRANSIENT_INFRASTRUCTURE_ERROR_PATTERN = /\b(502|500|503|504|cloning|clone|network|timeout|timed out|connection|socket|fetch failed|curl 22|econnreset|enotfound|eai_again)\b/i;
+const INTERACTIVE_SESSION_STATES = new Set([
+    "AWAITING_PLAN_APPROVAL",
+    "AWAITING_USER_FEEDBACK",
+    "PAUSED",
+]);
 const getHeaders = (apiKey) => ({
     "Content-Type": "application/json",
     "X-Goog-Api-Key": apiKey,
@@ -261398,7 +261410,8 @@ const createJulesFixSession = async (apiKey, source, drift, deps = defaultDepend
             startingBranch: source.defaultBranch,
         },
     },
-    automationMode: "AUTOMATION_MODE_UNSPECIFIED",
+    automationMode: "AUTO_CREATE_PR",
+    requirePlanApproval: false,
 }, deps);
 exports.createJulesFixSession = createJulesFixSession;
 const getJulesSession = async (apiKey, sessionName, deps = defaultDependencies) => {
@@ -261465,6 +261478,17 @@ const extractPatchArtifacts = (sessionName, activities) => {
     return patches;
 };
 exports.extractPatchArtifacts = extractPatchArtifacts;
+const extractPullRequestOutput = (session) => {
+    for (const output of session.outputs ?? []) {
+        if (output.pullRequest?.url &&
+            output.pullRequest.title &&
+            typeof output.pullRequest.description === "string") {
+            return output.pullRequest;
+        }
+    }
+    throw new JulesMissingPullRequestOutputError(session.name);
+};
+exports.extractPullRequestOutput = extractPullRequestOutput;
 const waitForJulesSession = async (apiKey, sessionName, deps = defaultDependencies) => {
     const startedAt = Date.now();
     let delayMs = INITIAL_POLL_DELAY_MS;
@@ -261479,6 +261503,9 @@ const waitForJulesSession = async (apiKey, sessionName, deps = defaultDependenci
             throw new JulesSessionStatusError(sessionName, "FAILED", reason
                 ? `Jules session ${sessionName} failed: ${reason}`
                 : `Jules session ${sessionName} failed.`, reason);
+        }
+        if (INTERACTIVE_SESSION_STATES.has(session.state)) {
+            throw new JulesSessionStatusError(sessionName, session.state, `Jules session ${sessionName} entered interactive state ${session.state}, which violates zero-touch execution.`);
         }
         await sleep(delayMs);
         delayMs = Math.min(delayMs * 2, MAX_POLL_DELAY_MS);
@@ -261854,17 +261881,12 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.handleFixCommand = void 0;
-const node_crypto_1 = __nccwpck_require__(7598);
-const promises_1 = __nccwpck_require__(1455);
-const node_os_1 = __nccwpck_require__(8161);
-const node_path_1 = __nccwpck_require__(6760);
 const core = __importStar(__nccwpck_require__(6966));
 const github = __importStar(__nccwpck_require__(9512));
 const github_js_1 = __nccwpck_require__(9294);
 const jules_js_1 = __nccwpck_require__(3054);
 const issue_context_js_1 = __nccwpck_require__(9840);
 const orchestrator_js_1 = __nccwpck_require__(3029);
-const git_js_1 = __nccwpck_require__(8584);
 const notifyStart = async (ctx) => {
     const { octokit, repo, issueNumber, commentId } = ctx;
     await (0, github_js_1.addCommentReaction)(ctx.githubToken, commentId, "eyes");
@@ -261872,72 +261894,17 @@ const notifyStart = async (ctx) => {
         owner: repo.owner,
         repo: repo.repo,
         issue_number: issueNumber,
-        body: "🚀 depSync is rebuilding focused context and generating a Pull Request...",
+        body: "🚀 depSync is rebuilding focused context and launching Jules in zero-touch mode to export the fix PR natively...",
     });
 };
-const createPatchFile = async (patch) => {
-    const patchFilePath = (0, node_path_1.join)((0, node_os_1.tmpdir)(), `depsync-${(0, node_crypto_1.randomUUID)()}.patch`);
-    await (0, promises_1.writeFile)(patchFilePath, patch, "utf-8");
-    return patchFilePath;
-};
-const describePatch = (patch, activityName) => {
-    const diffLine = patch
-        .split("\n")
-        .find((line) => line.startsWith("diff --git "));
-    return diffLine ?? activityName;
-};
-const applyPatchArtifactsSequentially = async (_ctx, patches) => {
-    let appliedAnyPatch = false;
-    for (const patchArtifact of patches) {
-        const patchLabel = describePatch(patchArtifact.patch, patchArtifact.activityName);
-        const patchFilePath = await createPatchFile(patchArtifact.patch);
-        try {
-            git_js_1.gitOps.applyPatchFile(patchFilePath, patchLabel);
-            appliedAnyPatch = true;
-        }
-        catch (error) {
-            if (appliedAnyPatch) {
-                git_js_1.gitOps.restoreWorkingTree();
-            }
-            const message = error instanceof Error ? error.message : String(error);
-            throw new git_js_1.GitPatchApplyError(patchLabel, `Patch ${patchLabel} from ${patchArtifact.activityName} failed: ${message}`);
-        }
-        finally {
-            await (0, promises_1.rm)(patchFilePath, { force: true });
-        }
-    }
-    if (!appliedAnyPatch) {
-        return;
-    }
-    try {
-        git_js_1.gitOps.regenerateLockfile();
-    }
-    catch (error) {
-        git_js_1.gitOps.restoreWorkingTree();
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Failed to regenerate lockfile: ${message}`);
-    }
-};
-const pushFixesToGithub = async (ctx, branchName) => {
-    const { githubToken, repo } = ctx;
-    git_js_1.gitOps.configureUser();
-    git_js_1.gitOps.createBranch(branchName);
-    git_js_1.gitOps.commitAll("chore: automated dependency fix by depSync");
-    const remoteUrl = `https://x-access-token:${githubToken}@github.com/${repo.owner}/${repo.repo}.git`;
-    git_js_1.gitOps.push(remoteUrl, branchName, true);
-};
-const createFixPullRequest = async (ctx, branchName) => {
+const notifySuccess = async (ctx, pullRequest) => {
     const { octokit, repo, issueNumber } = ctx;
-    core.info("🎁 Creating Pull Request...");
-    const { data: pr } = await octokit.rest.pulls.create({
+    await octokit.rest.issues.createComment({
         owner: repo.owner,
         repo: repo.repo,
-        title: `[depSync] Fix for Issue #${issueNumber}`,
-        head: branchName,
-        base: "main",
-        body: `This PR was automatically generated by depSync in response to issue #${issueNumber}.\n\nCloses #${issueNumber}`,
+        issue_number: issueNumber,
+        body: `✅ Jules exported the fix PR natively: [${pullRequest.title}](${pullRequest.url})`,
     });
-    return pr;
 };
 const handleFailure = async (ctx, message) => {
     const { octokit, repo, issueNumber } = ctx;
@@ -261946,7 +261913,7 @@ const handleFailure = async (ctx, message) => {
         owner: repo.owner,
         repo: repo.repo,
         issue_number: issueNumber,
-        body: `❌ **Failed to generate PR**: ${message}`,
+        body: `❌ **Autonomous /fix session failed**: ${message}`,
     });
 };
 const cleanup = async (julesApiKey, sessionName) => {
@@ -261961,13 +261928,10 @@ const cleanup = async (julesApiKey, sessionName) => {
 const handleFixCommand = async (githubToken, julesApiKey, issueBody, issueNumber, commentId, coreFrameworks) => {
     const context = {
         githubToken,
-        julesApiKey,
-        issueBody,
         issueNumber,
         commentId,
         octokit: github.getOctokit(githubToken),
         repo: github.context.repo,
-        coreFrameworks,
     };
     let sessionName;
     try {
@@ -261977,12 +261941,8 @@ const handleFixCommand = async (githubToken, julesApiKey, issueBody, issueNumber
         const source = await (0, jules_js_1.resolveJulesSource)(julesApiKey, context.repo.owner, context.repo.repo);
         const session = await (0, jules_js_1.runJulesSessionWithRetry)(julesApiKey, (deps) => (0, jules_js_1.createJulesFixSession)(julesApiKey, source, drift, deps));
         sessionName = session.name;
-        const activities = await (0, jules_js_1.listAllJulesActivities)(julesApiKey, session.name);
-        const patches = (0, jules_js_1.extractPatchArtifacts)(session.name, activities);
-        await applyPatchArtifactsSequentially(context, patches);
-        const branchName = `depsync/fix-issue-${issueNumber}`;
-        await pushFixesToGithub(context, branchName);
-        await createFixPullRequest(context, branchName);
+        const pullRequest = (0, jules_js_1.extractPullRequestOutput)(session);
+        await notifySuccess(context, pullRequest);
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -262787,17 +262747,9 @@ Rules:
 - Call out whether the dependency is isolated or structurally widespread.
 - Mention the highest-risk files or services only by path/name, never dump full code.
 - Do not propose a pull request or branch strategy.`;
-const FIX_INSTRUCTION_TEXT = `You are an expert migration assistant. The target dependency has breaking changes outlined in the release notes and the AST context shows exactly where it is used.
-
-Rules:
-1. **HEADLESS AUTONOMOUS MODE:** "You are running in a headless, zero-touch CI environment. You CANNOT ask questions or wait for user input. If you encounter ambiguity regarding breaking changes, you MUST make your best executive decision, write the code patch, and immediately finish the session."
-2. **ABSOLUTE BAN ON CI EXECUTION:** "CRITICAL: You are STRICTLY FORBIDDEN from running ANY shell commands. Do NOT run \`npm install\`, \`pnpm install\`, \`pnpm test\`, \`typecheck\`, \`build\`, \`lint\`, or any validation scripts. We handle CI natively on our end after you provide the patch."
-3. **CODE MIGRATION MANDATE:** "Your primary job is CODE MIGRATION, not just version bumping. If a dependency has a major update, you MUST analyze the provided AST context and modify the actual TypeScript source code files to adapt to the new API/breaking changes. Do not just update \`package.json\` and stop. Provide the unidiff patches for ALL required source code changes."
-4. Generate the exact code changes needed to safely migrate the codebase.
-5. Prioritize correctness over breadth; only touch files that require changes.
-6. If an exported function signature would need to change, treat that as high risk and explain it clearly.
-7. Return actionable implementation output suitable for downstream file patch application.
-8. CRITICAL: DO NOT modify \`pnpm-lock.yaml\` or any lockfiles. You must only modify \`package.json\` and the relevant source files.`;
+const FIX_INSTRUCTION_TEXT = `ROLE: You are an autonomous AI developer maintaining a critical production system.
+MANDATE: You MUST autonomously migrate dependencies, modify TypeScript source code to fix breaking changes, and verify your work by running native tests (\`pnpm install\`, \`pnpm typecheck\`, \`pnpm test\`).
+CRITICAL ZERO-TOUCH RULE: You are running in a headless overnight CI pipeline. You CANNOT ask questions. You CANNOT wait for user input or approvals. If you encounter ambiguity, make your best engineering judgment, complete the task, and natively export the Pull Request. Never pause the session.`;
 const toProcessedUsages = (payloads) => payloads.flatMap((payload) => payload.usages.flatMap((usage) => usage.usages.map((ctx) => ({
     serviceName: payload.package.packageName,
     serviceDescription: payload.package.serviceDescription,
@@ -263031,165 +262983,6 @@ const run = async () => {
 };
 exports.run = run;
 (0, exports.run)();
-
-
-/***/ }),
-
-/***/ 8584:
-/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
-
-"use strict";
-
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.gitOps = exports.GitPatchApplyError = void 0;
-const node_child_process_1 = __nccwpck_require__(1421);
-const node_fs_1 = __nccwpck_require__(3024);
-const core = __importStar(__nccwpck_require__(6966));
-class GitPatchApplyError extends Error {
-    patchLabel;
-    constructor(patchLabel, message) {
-        super(message);
-        this.name = "GitPatchApplyError";
-        this.patchLabel = patchLabel;
-    }
-}
-exports.GitPatchApplyError = GitPatchApplyError;
-/**
- * Execute a git command using spawnSync with array-based arguments for maximum security.
- * Throws an error with stderr output if the command fails.
- */
-const runGit = (args, _options = {}) => {
-    const result = (0, node_child_process_1.spawnSync)("git", args, {
-        encoding: "utf-8",
-        shell: false,
-    });
-    if (result.status !== 0) {
-        const message = result.stderr?.trim() || `Git command failed: git ${args.join(" ")}`;
-        throw new Error(message);
-    }
-    return result.stdout || "";
-};
-const runCommand = (command, args) => {
-    const result = (0, node_child_process_1.spawnSync)(command, args, {
-        cwd: process.cwd(),
-        encoding: "utf-8",
-        shell: false,
-    });
-    if (result.error) {
-        throw result.error;
-    }
-    if (result.status !== 0) {
-        const message = result.stderr?.trim() ||
-            `${command} command failed: ${command} ${args.join(" ")}`;
-        throw new Error(message);
-    }
-    return result.stdout || "";
-};
-const getPreferredPackageManager = () => {
-    if ((0, node_fs_1.existsSync)("pnpm-lock.yaml")) {
-        return "pnpm";
-    }
-    if (!(0, node_fs_1.existsSync)("package.json")) {
-        return "npm";
-    }
-    try {
-        const packageJson = JSON.parse((0, node_fs_1.readFileSync)("package.json", "utf-8"));
-        return packageJson.packageManager?.startsWith("pnpm@") ? "pnpm" : "npm";
-    }
-    catch {
-        return "npm";
-    }
-};
-/**
- * Clean wrapper for Git operations to decouple from shell execution.
- * Uses spawnSync internally with strict array arguments to prevent command injection.
- */
-exports.gitOps = {
-    configureUser: (name = "depSync Bot", email = "bot@depsync.ai") => {
-        core.info(`🔧 Configuring Git user: ${name} <${email}>`);
-        runGit(["config", "user.name", name]);
-        runGit(["config", "user.email", email]);
-    },
-    createBranch: (branchName) => {
-        core.info(`🌿 Creating branch ${branchName}...`);
-        runGit(["checkout", "-b", branchName]);
-    },
-    commitAll: (message) => {
-        core.info("💾 Committing changes...");
-        runGit(["add", "."]);
-        runGit(["commit", "-m", message]);
-    },
-    applyPatchFile: (patchFilePath, patchLabel) => {
-        core.info(`🩹 Applying patch ${patchLabel} with GNU patch...`);
-        try {
-            runCommand("patch", [
-                "-p1",
-                "--no-backup-if-mismatch",
-                "--fuzz=3",
-                "-i",
-                patchFilePath,
-            ]);
-        }
-        catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            throw new GitPatchApplyError(patchLabel, `Failed to apply patch ${patchLabel}: ${message}`);
-        }
-    },
-    regenerateLockfile: () => {
-        const packageManager = getPreferredPackageManager();
-        const args = packageManager === "pnpm"
-            ? ["install", "--no-frozen-lockfile"]
-            : ["install"];
-        core.info(`📦 Regenerating lockfile with ${packageManager} ${args.join(" ")}...`);
-        runCommand(packageManager, args);
-    },
-    restoreWorkingTree: () => {
-        core.info("♻️ Restoring clean working tree...");
-        runGit(["reset", "--hard"]);
-        runGit(["clean", "-fd"]);
-    },
-    push: (remoteUrl, branchName, force = false) => {
-        core.info(`⬆️ Pushing changes to ${branchName}...`);
-        const args = ["push", remoteUrl, branchName];
-        if (force) {
-            args.push("--force");
-        }
-        runGit(args);
-    },
-};
 
 
 /***/ }),
@@ -263627,14 +263420,6 @@ module.exports = require("inspector");
 
 "use strict";
 module.exports = require("net");
-
-/***/ }),
-
-/***/ 1421:
-/***/ ((module) => {
-
-"use strict";
-module.exports = require("node:child_process");
 
 /***/ }),
 

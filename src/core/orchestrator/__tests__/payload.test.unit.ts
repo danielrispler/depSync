@@ -13,9 +13,11 @@ describe("payload generator", () => {
 		expect(result.dependencyName).toBe(mockDependencyName);
 		expect(result.usages).toEqual([]);
 		expect(result.releaseNotes).toBeNull();
-		expect(result.instruction).toContain("expert migration assistant");
 		expect(result.instruction).toContain(
-			"CRITICAL: DO NOT modify `pnpm-lock.yaml` or any lockfiles.",
+			"ROLE: You are an autonomous AI developer maintaining a critical production system.",
+		);
+		expect(result.instruction).toContain(
+			"verify your work by running native tests (`pnpm install`, `pnpm typecheck`, `pnpm test`)",
 		);
 	});
 

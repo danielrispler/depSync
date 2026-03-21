@@ -3,14 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createJulesFixSession,
 	deleteJulesSession,
-	extractPatchArtifacts,
-	listAllJulesActivities,
+	extractPullRequestOutput,
 	resolveJulesSource,
 	runJulesSessionWithRetry,
 } from "../../clients/jules.js";
 import { rebuildDriftFromIssueContext } from "../../core/orchestrator/orchestrator.js";
-import { GitPatchApplyError, gitOps } from "../../infrastructure/git.js";
 import { handleFixCommand } from "../fix.command.js";
+
+const { mockCreateComment } = vi.hoisted(() => ({
+	mockCreateComment: vi.fn().mockResolvedValue({}),
+}));
 
 vi.mock("@actions/core");
 vi.mock("@actions/github", () => ({
@@ -20,10 +22,7 @@ vi.mock("@actions/github", () => ({
 	getOctokit: vi.fn().mockReturnValue({
 		rest: {
 			issues: {
-				createComment: vi.fn().mockResolvedValue({}),
-			},
-			pulls: {
-				create: vi.fn().mockResolvedValue({ data: { number: 42 } }),
+				createComment: mockCreateComment,
 			},
 		},
 	}),
@@ -36,14 +35,11 @@ vi.mock("../../clients/jules.js", () => ({
 		.fn()
 		.mockResolvedValue({ name: "sessions/fix-123" }),
 	deleteJulesSession: vi.fn().mockResolvedValue({}),
-	extractPatchArtifacts: vi.fn().mockReturnValue([
-		{
-			activityName: "sessions/fix-123/activities/1",
-			createTime: "2026-03-19T10:00:01.000Z",
-			patch: "diff --git a/src/app.ts b/src/app.ts\n...",
-		},
-	]),
-	listAllJulesActivities: vi.fn().mockResolvedValue([]),
+	extractPullRequestOutput: vi.fn().mockReturnValue({
+		url: "https://github.com/owner/repo/pull/42",
+		title: "[depSync] Fix for Issue #1",
+		description: "Closes #1",
+	}),
 	resolveJulesSource: vi.fn().mockResolvedValue({
 		sourceName: "sources/github-owner-repo",
 		defaultBranch: "main",
@@ -66,25 +62,6 @@ vi.mock("../../core/orchestrator/orchestrator.js", () => ({
 		payloads: [],
 	}),
 }));
-vi.mock("../../infrastructure/git.js", () => ({
-	GitPatchApplyError: class extends Error {
-		readonly patchLabel: string;
-
-		constructor(patchLabel: string, message: string) {
-			super(message);
-			this.patchLabel = patchLabel;
-		}
-	},
-	gitOps: {
-		applyPatchFile: vi.fn(),
-		configureUser: vi.fn(),
-		createBranch: vi.fn(),
-		commitAll: vi.fn(),
-		push: vi.fn(),
-		regenerateLockfile: vi.fn(),
-		restoreWorkingTree: vi.fn(),
-	},
-}));
 
 describe("handleFixCommand", () => {
 	const mockGithubToken = "token";
@@ -97,17 +74,18 @@ describe("handleFixCommand", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		vi.mocked(gitOps.applyPatchFile).mockImplementation(() => undefined);
-		vi.mocked(gitOps.regenerateLockfile).mockImplementation(() => undefined);
 		vi.mocked(runJulesSessionWithRetry).mockImplementation(
 			async (_apiKey, createSessionAttempt) =>
-				createSessionAttempt({
-					fetch: globalThis.fetch.bind(globalThis),
-				} as any),
+				({
+					...(await createSessionAttempt({
+						fetch: globalThis.fetch.bind(globalThis),
+					} as any)),
+					state: "COMPLETED",
+				}) as any,
 		);
 	});
 
-	it("applies patch artifacts, creates a PR, and cleans up the session on success", async () => {
+	it("reports the natively exported PR and cleans up the session on success", async () => {
 		await handleFixCommand(
 			mockGithubToken,
 			mockJulesApiKey,
@@ -121,22 +99,23 @@ describe("handleFixCommand", () => {
 		expect(resolveJulesSource).toHaveBeenCalled();
 		expect(runJulesSessionWithRetry).toHaveBeenCalled();
 		expect(createJulesFixSession).toHaveBeenCalled();
-		expect(listAllJulesActivities).toHaveBeenCalled();
-		expect(extractPatchArtifacts).toHaveBeenCalled();
-		expect(gitOps.applyPatchFile).toHaveBeenCalled();
-		expect(gitOps.regenerateLockfile).toHaveBeenCalled();
-		expect(gitOps.push).toHaveBeenCalled();
+		expect(extractPullRequestOutput).toHaveBeenCalled();
+		expect(mockCreateComment).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				body: expect.stringContaining("https://github.com/owner/repo/pull/42"),
+			}),
+		);
 		expect(deleteJulesSession).toHaveBeenCalledWith(
 			mockJulesApiKey,
 			"sessions/fix-123",
 		);
 	});
 
-	it("restores the working tree and comments on patch failure", async () => {
-		vi.mocked(gitOps.applyPatchFile).mockImplementation(() => {
-			throw new GitPatchApplyError(
-				"diff --git a/src/app.ts b/src/app.ts",
-				"boom",
+	it("comments on missing PR output and still cleans up the session", async () => {
+		vi.mocked(extractPullRequestOutput).mockImplementation(() => {
+			throw new Error(
+				"No pull request output was found for Jules session sessions/fix-123.",
 			);
 		});
 
@@ -149,34 +128,12 @@ describe("handleFixCommand", () => {
 			coreFrameworks,
 		);
 
-		expect(gitOps.restoreWorkingTree).not.toHaveBeenCalled();
 		expect(core.error).toHaveBeenCalledWith(
-			expect.stringContaining("Patch diff --git a/src/app.ts b/src/app.ts"),
+			expect.stringContaining("No pull request output was found"),
 		);
 		expect(deleteJulesSession).toHaveBeenCalledWith(
 			mockJulesApiKey,
 			"sessions/fix-123",
-		);
-	});
-
-	it("restores the working tree and comments on lockfile regeneration failure", async () => {
-		vi.mocked(gitOps.regenerateLockfile).mockImplementation(() => {
-			throw new Error("pnpm install failed");
-		});
-
-		await handleFixCommand(
-			mockGithubToken,
-			mockJulesApiKey,
-			mockIssueBody,
-			mockIssueNumber,
-			mockCommentId,
-			coreFrameworks,
-		);
-
-		expect(gitOps.applyPatchFile).toHaveBeenCalled();
-		expect(gitOps.restoreWorkingTree).toHaveBeenCalled();
-		expect(core.error).toHaveBeenCalledWith(
-			expect.stringContaining("Failed to regenerate lockfile"),
 		);
 	});
 

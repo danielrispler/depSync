@@ -6,6 +6,7 @@ import {
 	createJulesFixSession,
 	deleteJulesSession,
 	extractPatchArtifacts,
+	extractPullRequestOutput,
 	getJulesSession,
 	listAllJulesActivities,
 	listJulesSources,
@@ -132,7 +133,7 @@ describe("Jules API Client", () => {
 		);
 	});
 
-	it("creates a fix session in manual automation mode", async () => {
+	it("creates a fix session with autonomous PR export enabled", async () => {
 		const mockFetch = vi.fn().mockResolvedValue({
 			ok: true,
 			status: 200,
@@ -148,10 +149,11 @@ describe("Jules API Client", () => {
 		});
 
 		const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-		expect(requestBody.automationMode).toBe("AUTOMATION_MODE_UNSPECIFIED");
+		expect(requestBody.automationMode).toBe("AUTO_CREATE_PR");
+		expect(requestBody.requirePlanApproval).toBe(false);
 		expect(requestBody.sourceContext.source).toBe("sources/github-owner-repo");
 		expect(requestBody.prompt).toContain(
-			"CRITICAL: DO NOT modify `pnpm-lock.yaml` or any lockfiles.",
+			"CRITICAL ZERO-TOUCH RULE: You are running in a headless overnight CI pipeline.",
 		);
 	});
 
@@ -247,6 +249,25 @@ describe("Jules API Client", () => {
 				fetch: mockFetch as any,
 			}),
 		).rejects.toThrow(/Patch generation failed/);
+	});
+
+	it("fails fast when a session enters an interactive state", async () => {
+		const mockFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			status: 200,
+			text: vi.fn().mockResolvedValue(
+				JSON.stringify({
+					name: mockSession,
+					state: "AWAITING_USER_FEEDBACK",
+				}),
+			),
+		});
+
+		await expect(
+			waitForJulesSession(mockApiKey, mockSession, {
+				fetch: mockFetch as any,
+			}),
+		).rejects.toThrow(/violates zero-touch execution/);
 	});
 
 	it("retries transient failed sessions by creating a fresh session", async () => {
@@ -548,6 +569,34 @@ describe("Jules API Client", () => {
 		expect(patches).toHaveLength(1);
 		expect(patches[0]?.patch).toContain("diff --git");
 		expect(patches[0]?.suggestedCommitMessage).toBe("fix: update file");
+	});
+
+	it("extracts the exported pull request from session outputs", () => {
+		const pullRequest = extractPullRequestOutput({
+			name: mockSession,
+			id: "123",
+			title: "depSync: Fix lodash",
+			state: "COMPLETED",
+			sourceContext: {
+				source: "sources/github-owner-repo",
+				githubRepoContext: {
+					startingBranch: "main",
+				},
+			},
+			prompt: "prompt",
+			outputs: [
+				{
+					pullRequest: {
+						url: "https://github.com/owner/repo/pull/42",
+						title: "[depSync] Fix lodash",
+						description: "Closes #1",
+					},
+				},
+			],
+		});
+
+		expect(pullRequest.url).toBe("https://github.com/owner/repo/pull/42");
+		expect(pullRequest.title).toBe("[depSync] Fix lodash");
 	});
 
 	it("deletes a session by name", async () => {
