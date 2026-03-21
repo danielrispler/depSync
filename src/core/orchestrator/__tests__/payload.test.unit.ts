@@ -15,7 +15,7 @@ describe("payload generator", () => {
 		expect(result.releaseNotes).toBeNull();
 		expect(result.instruction).toContain("expert migration assistant");
 		expect(result.instruction).toContain(
-			"CRITICAL: DO NOT modify pnpm-lock.yaml or any lockfiles.",
+			"CRITICAL: DO NOT modify `pnpm-lock.yaml` or any lockfiles.",
 		);
 	});
 

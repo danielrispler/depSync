@@ -151,7 +151,7 @@ describe("Jules API Client", () => {
 		expect(requestBody.automationMode).toBe("AUTOMATION_MODE_UNSPECIFIED");
 		expect(requestBody.sourceContext.source).toBe("sources/github-owner-repo");
 		expect(requestBody.prompt).toContain(
-			"CRITICAL: DO NOT modify pnpm-lock.yaml or any lockfiles.",
+			"CRITICAL: DO NOT modify `pnpm-lock.yaml` or any lockfiles.",
 		);
 	});
 

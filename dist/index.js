@@ -262790,11 +262790,14 @@ Rules:
 const FIX_INSTRUCTION_TEXT = `You are an expert migration assistant. The target dependency has breaking changes outlined in the release notes and the AST context shows exactly where it is used.
 
 Rules:
-1. Generate the exact code changes needed to safely migrate the codebase.
-2. Prioritize correctness over breadth; only touch files that require changes.
-3. If an exported function signature would need to change, treat that as high risk and explain it clearly.
-4. Return actionable implementation output suitable for downstream file patch application.
-5. CRITICAL: DO NOT modify pnpm-lock.yaml or any lockfiles. You must only modify package.json and the relevant source files.`;
+1. **HEADLESS AUTONOMOUS MODE:** "You are running in a headless, zero-touch CI environment. You CANNOT ask questions or wait for user input. If you encounter ambiguity regarding breaking changes, you MUST make your best executive decision, write the code patch, and immediately finish the session."
+2. **ABSOLUTE BAN ON CI EXECUTION:** "CRITICAL: You are STRICTLY FORBIDDEN from running ANY shell commands. Do NOT run \`npm install\`, \`pnpm install\`, \`pnpm test\`, \`typecheck\`, \`build\`, \`lint\`, or any validation scripts. We handle CI natively on our end after you provide the patch."
+3. **CODE MIGRATION MANDATE:** "Your primary job is CODE MIGRATION, not just version bumping. If a dependency has a major update, you MUST analyze the provided AST context and modify the actual TypeScript source code files to adapt to the new API/breaking changes. Do not just update \`package.json\` and stop. Provide the unidiff patches for ALL required source code changes."
+4. Generate the exact code changes needed to safely migrate the codebase.
+5. Prioritize correctness over breadth; only touch files that require changes.
+6. If an exported function signature would need to change, treat that as high risk and explain it clearly.
+7. Return actionable implementation output suitable for downstream file patch application.
+8. CRITICAL: DO NOT modify \`pnpm-lock.yaml\` or any lockfiles. You must only modify \`package.json\` and the relevant source files.`;
 const toProcessedUsages = (payloads) => payloads.flatMap((payload) => payload.usages.flatMap((usage) => usage.usages.map((ctx) => ({
     serviceName: payload.package.packageName,
     serviceDescription: payload.package.serviceDescription,
